@@ -209,5 +209,5 @@ __marimo__/
 # MacOS
 .DS_Store
 
-# Custom data
-GoodReads_100k_books.csv
+# Custom
+data/
