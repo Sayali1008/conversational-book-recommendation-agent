@@ -1,4 +1,4 @@
-# Phase 1 — Semantic Book Representation & Retrieval
+# Phase 1 - Semantic Book Representation & Retrieval
 
 ## Goal
 Transform raw book metadata into a structured, searchable semantic space where books can be retrieved by meaning rather than exact keyword overlap.
