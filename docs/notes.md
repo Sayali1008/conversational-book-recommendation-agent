@@ -1,3 +1,5 @@
+# `books_data.csv`
+
 ### Understanding the schema
 
 | Query | Count/Percentage |
@@ -52,4 +54,3 @@
 - .apply() is slow > use panda's built in vectorized operations instead
 - .astype('category') > categorical fields
 - pdf.read_csv(, usecols=) to load only required columns resulting in less memory usage
-
