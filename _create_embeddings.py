@@ -47,11 +47,3 @@ def run_semantic_search(query, model, index, top_k=5):
     faiss.normalize_L2(query_vector)
     scores, indices = index.search(query_vector, top_k)
     return scores[0], indices[0]
-
-# def main():
-    # scores, indices = run_semantic_search(args.query, model, index, top_k=5)
-    # for score, idx in zip(scores, indices):
-    #     print(f"Score: {score} | Title: {df.iloc[idx]['title']} | Genre {df.iloc[idx]['genres']}")
-
-    # Example output: (num_rows, 384) for all-MiniLM-L6-v2
-    # Example output: (num_rows, 768) for all-mpnet-base-v2

@@ -209,6 +209,12 @@ __marimo__/
 # MacOS
 .DS_Store
 
-# Custom
+# Custom directories
 archive/
 data/
+logs/
+app_logs/
+node_modules/
+
+# Custom files
+run.txt

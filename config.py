@@ -3,7 +3,7 @@ Centralized configuration for the recommendation system pipeline.
 Defines all paths, hyperparameters, and constants used across stages.
 """
 
-import os
+from datetime import datetime
 from pathlib import Path
 
 # ============================================================
@@ -18,17 +18,13 @@ CLEAN_DATA_DIR = DATA_DIR / "clean"
 EMBEDDINGS_DIR = DATA_DIR / "embeddings"
 MATRICES_DIR = DATA_DIR / "matrices"
 PKL_DIR = DATA_DIR / "pkl"
-FACTORS_DIR = DATA_DIR / "factors"
+MODEL_DIR = DATA_DIR / "model"
 LOGS_DIR = PROJECT_ROOT / "logs"
-LOG_FILE = str(LOGS_DIR / "app.log")
 
-# Create directories if they don't exist
-dir_list = [CLEAN_DATA_DIR, EMBEDDINGS_DIR, MATRICES_DIR, PKL_DIR, FACTORS_DIR, LOGS_DIR, ]
-for directory in dir_list:
-    os.makedirs(directory, exist_ok=True)
+date_str = datetime.now().strftime("%m%d%Y")
+LOG_FILE = str(LOGS_DIR / f"{date_str}_3.log")
 
 REPEATS = 100
-
 # ============================================================
 # Stage 1: Data Preprocessing
 # ============================================================
@@ -66,22 +62,23 @@ MIN_DESC_LENGTH = 10
 TOP_N_GENRES = 50
 COMMON_DELIMS = [";", "|", "/", "•"]
 MIN_USER_INTERACTIONS = 5
-MAX_USER_INTERACTIONS = 500
 MIN_BOOK_INTERACTIONS = 5
+MAX_USER_INTERACTIONS = 500
 
 # ============================================================
 # Stage 2: Semantic Search (Embeddings)
 # ============================================================
-# Output files
-OUTPUT_CATALOG_BOOKS_INDEX = str(EMBEDDINGS_DIR / "catalog_books.index")
-OUTPUT_CATALOG_BOOKS_EMBEDDINGS = str(EMBEDDINGS_DIR / "catalog_books.npy")
-
 # Configuration
 BATCH_SIZE = 64
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # or "all-mpnet-base-v2"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# EMBEDDING_MODEL = "all-mpnet-base-v2"
 # Example output: (num_rows, 384) for all-MiniLM-L6-v2
 # Example output: (num_rows, 768) for all-mpnet-base-v2
 
+# Output files
+dim = 384 if EMBEDDING_MODEL == 'all-MiniLM-L6-v2' else 768
+OUTPUT_CATALOG_BOOKS_INDEX = str(EMBEDDINGS_DIR / f"catalog_books_{dim}.index")
+OUTPUT_CATALOG_BOOKS_EMBEDDINGS = str(EMBEDDINGS_DIR / f"catalog_books_{dim}.npy")
 # ============================================================
 # Stage 3: Build Interaction Matrix
 # ============================================================
@@ -103,6 +100,34 @@ RANDOM_STATE = 42
 # Stage 4: Train Collaborative Filtering
 # ============================================================
 # Output files
-OUTPUT_ALS_MODEL = str(PKL_DIR / "als_model.pkl")
-OUTPUT_USER_FACTORS = str(FACTORS_DIR / "user_factors.npy")
-OUTPUT_BOOK_FACTORS = str(FACTORS_DIR / "book_factors.npy")
+OUTPUT_ALS_MODEL = str(MODEL_DIR / "als_model.pkl")
+OUTPUT_USER_FACTORS = str(MODEL_DIR / "user_factors.npy")
+OUTPUT_BOOK_FACTORS = str(MODEL_DIR / "book_factors.npy")
+
+
+# ============================================================
+# Hybrid Recommender Configuration
+# ============================================================
+CF_CANDIDATE_POOL_SIZE = 200
+FINAL_K = 10
+
+# Hybrid recommendation parameters
+HYBRID_LAMBDA_WEIGHT = 0.65  # 0=pure embedding, 1=pure CF
+HYBRID_CANDIDATE_POOL_SIZE = 300  # Number of CF candidates to consider before embedding re-ranking
+HYBRID_FILTER_RATED = True  # Exclude already-rated books from recommendations
+HYBRID_NORM = "minmax"  # Normalization method: "minmax", "softmax", "zscore"
+HYBRID_NORM_METADATA = None  # Temperature for softmax (e.g., 0.01, 0.3, 0.9)
+
+# Cold-start strategy
+COLD_START_USE_EMBEDDING_ONLY = True  # Use embedding-only for cold users and items
+COLD_START_FALLBACK_ONLY = True  # For warm users, only use cold items as fallback if warm has <k results
+
+# Evaluation parameters
+EVAL_K_VALUES = [5, 10]
+EVAL_LAMBDA_VALUES = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+EVAL_NORM = "softmax"
+EVAL_NORM_METADATA = 0.9  # Temperature for softmax during evaluation
+EVAL_CANDIDATE_POOL_SIZE = 300
+EVAL_MIN_VALIDATION_ITEMS = 2
+EVAL_MIN_CONFIDENCE = 1
+EVAL_FILTER_RATED = True
