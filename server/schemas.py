@@ -1,16 +1,18 @@
-from typing import List, Optional
+from typing import Optional
 from pydantic import BaseModel, Field
 
 class BookRecommendation(BaseModel):
     book_id: int
+    catalog_idx: int
     title: str
+    authors: list[str]
     score: float
     source: str
 
 class RecommendResponse(BaseModel):
-    recommendations: List[BookRecommendation]
+    recommendations: list[BookRecommendation]
     strategy: str
-    used_seeds: List[int] = []
+    used_seeds: list[int] = []
 
 class SwipeRequest(BaseModel):
     user_id: str
@@ -20,4 +22,4 @@ class SwipeRequest(BaseModel):
 
 class SwipeResponse(BaseModel):
     status: str
-    next_recommendations: Optional[List[BookRecommendation]] = None
+    next_recommendations: Optional[list[BookRecommendation]] = None

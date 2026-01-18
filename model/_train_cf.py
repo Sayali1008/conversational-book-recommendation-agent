@@ -5,7 +5,7 @@ import pandas as pd
 import scipy.sparse as sp
 from implicit.als import AlternatingLeastSquares
 
-from config import *
+from constants import *
 from utils import *
 from utils import save_pickle
 
@@ -196,7 +196,7 @@ def stratify_user_distribution(ratings_df, seed=42):
 
 
 def prepare_data(logger):
-    ratings_df = pd.read_feather(OUTPUT_RATINGS)
+    ratings_df = pd.read_feather(PATH_CLEAN_RATINGS)
     logger.info(f"Ratings data size before filtering min/max interactions: {ratings_df.shape}")
 
     ratings_df = filter_min_max_interactions(ratings_df)

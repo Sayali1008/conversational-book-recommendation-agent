@@ -1,6 +1,5 @@
 import ast
 import os
-import pickle
 import sys
 import time
 
@@ -13,7 +12,7 @@ import _data_preprocessing
 import _hybrid_recommender
 import _evaluate
 import _train_cf
-from config import *
+from constants import *
 from utils import *
 
 
@@ -26,13 +25,13 @@ def run_data_preprocessing(logger):
     ratings_df = _data_preprocessing.clean_ratings_data(logger, ratings_df, catalog_books_df)
     logger.info(f"✓ Ratings data cleaned: shape={ratings_df.shape}")
 
-    catalog_books_df[OUTPUT_COLS_BOOKS].to_feather(OUTPUT_BOOKS)
-    ratings_df[OUTPUT_COLS_RATINGS].to_feather(OUTPUT_RATINGS)
+    catalog_books_df[OUTPUT_COLS_BOOKS].to_feather(PATH_CLEAN_BOOKS)
+    ratings_df[OUTPUT_COLS_RATINGS].to_feather(PATH_CLEAN_RATINGS)
 
 
 def run_create_embeddings(logger):
     embeddings_model = SentenceTransformer(EMBEDDING_MODEL)
-    catalog_books_df = safe_read_feather(OUTPUT_BOOKS)
+    catalog_books_df = safe_read_feather(PATH_CLEAN_BOOKS)
     embeddings, index = _create_embeddings.generate_embeddings(logger, catalog_books_df, embeddings_model, BATCH_SIZE)
 
     # Example output: (n_catalog_books, 384) for all-MiniLM-L6-v2
@@ -74,9 +73,9 @@ def run_train_cf_model(logger):
     user_factors = cf_model.user_factors  # Shape: (n_users, n_factors)
 
     # Save model and factors
-    save_pickle(cf_model, OUTPUT_ALS_MODEL)
-    np.save(OUTPUT_USER_FACTORS, user_factors)
-    np.save(OUTPUT_BOOK_FACTORS, book_factors)
+    save_pickle(cf_model, PATH_ALS_MODEL)
+    np.save(PATH_USER_FACTORS, user_factors)
+    np.save(PATH_BOOK_FACTORS, book_factors)
     _train_cf._log_model_statistics(logger, user_factors, book_factors)
 
 
@@ -88,8 +87,8 @@ def run_evaluation(logger):
     - Hybrid (various lambda values)
     """
 
-    user_factors = np.load(OUTPUT_USER_FACTORS)
-    book_factors = np.load(OUTPUT_BOOK_FACTORS)
+    user_factors = np.load(PATH_USER_FACTORS)
+    book_factors = np.load(PATH_BOOK_FACTORS)
     train_matrix = sp.load_npz(OUTPUT_TRAIN_MATRIX)
     val_matrix = sp.load_npz(OUTPUT_VAL_MATRIX)
     test_matrix = sp.load_npz(OUTPUT_TEST_MATRIX)
@@ -136,12 +135,12 @@ def run_hybrid_recommender(logger):
     logger.info("Starting hybrid recommender smoke-test")
 
     # Load everything
-    user_factors = np.load(OUTPUT_USER_FACTORS)
-    book_factors = np.load(OUTPUT_BOOK_FACTORS)
+    user_factors = np.load(PATH_USER_FACTORS)
+    book_factors = np.load(PATH_BOOK_FACTORS)
     train_matrix = sp.load_npz(OUTPUT_TRAIN_MATRIX)
     catalog_embeddings = np.load(OUTPUT_CATALOG_BOOKS_EMBEDDINGS)
-    catalog_df = safe_read_feather(OUTPUT_BOOKS)
-    ratings_df = safe_read_feather(OUTPUT_RATINGS)
+    catalog_df = safe_read_feather(PATH_CLEAN_BOOKS)
+    ratings_df = safe_read_feather(PATH_CLEAN_RATINGS)
 
     # Load book and user index mappings
     user_to_cf_idx, cf_idx_to_user = load_index_mappings(USER_IDX_PKL)
@@ -262,7 +261,7 @@ def run_pipeline(logger, skip_done=True):
     # ============================================================
     # STAGE 1: Data Preprocessing
     # ============================================================
-    if skip_done and os.path.exists(OUTPUT_BOOKS) and os.path.exists(OUTPUT_RATINGS):
+    if skip_done and os.path.exists(PATH_CLEAN_BOOKS) and os.path.exists(PATH_CLEAN_RATINGS):
         logger.info("Stage 1 outputs already exist, skipping...")
     else:
         logger.info("=" * REPEATS)
@@ -302,7 +301,7 @@ def run_pipeline(logger, skip_done=True):
     # ============================================================
     # STAGE 4: Train Collaborative Filtering Model
     # ============================================================
-    if skip_done and os.path.exists(OUTPUT_ALS_MODEL):
+    if skip_done and os.path.exists(PATH_ALS_MODEL):
         logger.info("Stage 4 outputs already exist, skipping...")
     else:
         logger.info("=" * REPEATS)

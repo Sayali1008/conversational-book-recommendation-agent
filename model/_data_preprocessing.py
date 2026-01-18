@@ -4,7 +4,7 @@ import html
 import pandas as pd
 from pydantic import ConfigDict, validate_call
 
-from config import *
+from constants import *
 
 
 # ----------------------

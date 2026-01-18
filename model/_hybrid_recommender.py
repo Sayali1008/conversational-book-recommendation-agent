@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from config import *
+from constants import *
 from utils import setup_logging
 
 # Set up logging to file

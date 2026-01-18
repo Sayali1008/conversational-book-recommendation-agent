@@ -19,7 +19,6 @@ def setup_logging(stage_name: str, log_file: str, level=logging.INFO):
 
     logging.basicConfig(
         level=level,
-        # format="%(message)s",
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         filename=log_file,
         filemode="w",

@@ -24,6 +24,9 @@
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div>
             <strong>{{ idx + 1 }}. {{ r.title }}</strong>
+            <div v-if="r.authors && r.authors.length" style="font-size: 13px; color: #444; margin-top: 4px;">
+              by {{ r.authors.join(', ') }}
+            </div>
             <div style="font-size: 12px; color: #666;">Score: {{ r.score.toFixed(3) }} • Source: {{ r.source }}</div>
           </div>
           <div>

@@ -6,7 +6,7 @@ import scipy.sparse as sp
 from sklearn import logger
 
 import _hybrid_recommender
-from config import *
+from constants import *
 
 # region [HELPERS]
 
@@ -173,7 +173,7 @@ def _log_hyperparameters(
 
     # ALS model hyperparameters (re-log in evaluation)
     try:
-        with open(OUTPUT_ALS_MODEL, "rb") as f:
+        with open(PATH_ALS_MODEL, "rb") as f:
             als_model = pickle.load(f)
         logger.info("ALS settings:")
         logger.info(f"  Factors: {getattr(als_model, 'factors', 'N/A')}")
