@@ -1,7 +1,7 @@
 import sqlite3
 from typing import Optional
 
-class Storage:
+class Interactions:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_db()
@@ -13,7 +13,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
                     book_id INTEGER NOT NULL,
-                    action TEXT NOT NULL CHECK(action IN ('like','dislike','superlike')),
+                    action TEXT NOT NULL CHECK(action IN ('like','dislike')),
                     confidence REAL,
                     ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 )

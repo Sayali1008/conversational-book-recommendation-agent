@@ -8,57 +8,54 @@ from typing import Optional, Set, Tuple
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from common.constants import *
+from common.constants import PATHS
 from common.helpers import normalize_scores
-from common.utils import *
+from common.utils import setup_logging
 
-from .data_models import EvalConfig, RecommendationContext
+from .data_models import RecommendationConfig, RecommendationContext
 
-logger = setup_logging(__name__, APP_LOG_FILE)
+logger = setup_logging(__name__, PATHS["app_log_file"])
 
 
 def get_content_based_recommendations(
     context: RecommendationContext,
-    config: EvalConfig,
+    config: RecommendationConfig,
     k: int = 10,
-    seed_catalog_indices: Optional[np.ndarray] = None,
-    user_profile: Optional[np.ndarray] = None,
-    exclude_indices: Optional[Set[int]] = None,
-    candidate_catalog_indices: Optional[np.ndarray] = None,
+    exclude_catalog_rows: Optional[Set[int]] = None,
+    candidate_catalog_rows: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate content-based recommendations.
 
     Returns:
-        catalog_indices: (k,) array of recommended catalog indices
+        catalog_rows: (k,) array of recommended catalog indices
         scores: (k,) array of recommendation scores
         sources: (k,) array ["embedding_only" for each result]
     """
 
-    exclude_indices = exclude_indices or set()
+    exclude_catalog_rows = exclude_catalog_rows or set()
 
-    # Build or use provided user profile
-    if user_profile is None:
-        if seed_catalog_indices is not None:
-            user_profile = context["catalog_embeddings"][seed_catalog_indices].mean(axis=0)
-            logger.debug(f"[CB] Built profile from {len(seed_catalog_indices)} seed items")
-        else:
-            user_profile = context["catalog_embeddings"].mean(axis=0)
-            logger.debug(f"[CB] Built profile from catalog mean")
+    # Build or use provided user profile    
+    if exclude_catalog_rows is not None:
+        user_profile = context["catalog_embeddings"][list(exclude_catalog_rows)].mean(axis=0)
+        logger.debug(f"[CB] Built profile from {len(exclude_catalog_rows)} seed items")
+    else:
+        user_profile = context["catalog_embeddings"].mean(axis=0)
+        logger.debug(f"[CB] Built profile from catalog mean")
 
     # Determine search space
-    if candidate_catalog_indices is None:
-        candidate_catalog_indices = _get_cold_catalog_indices(context)
+    if candidate_catalog_rows is None:
+        candidate_catalog_rows = _get_cold_catalog_indices(context)
 
     # Filter out exclusions
-    # exclude_indices will contain seed item calalog, already rated books (for warm users), and recommendations (for warm users)
-    candidates = [c for c in candidate_catalog_indices if c not in exclude_indices]
+    # exclude_catalog_rows will contain seed item calalog, already rated books (for warm users), and recommendations (for warm users)
+    candidates = [c for c in candidate_catalog_rows if c not in exclude_catalog_rows]
 
     if not candidates:
         logger.debug(f"[CB] No candidates available after filtering")
         return np.array([], dtype=int), np.array([], dtype=float), np.array([], dtype=object)
 
-    logger.debug(f"[CB] Searching {len(candidates)} items from {len(candidate_catalog_indices)} total")
+    logger.debug(f"[CB] Searching {len(candidates)} items from {len(candidate_catalog_rows)} total")
 
     # Compute similarity scores
     candidate_embeddings = context["catalog_embeddings"][candidates]
@@ -73,45 +70,6 @@ def get_content_based_recommendations(
     # Select top-k
     top_idx = np.argsort(scores)[::-1][:k]
     return (np.array(candidates)[top_idx], scores[top_idx], np.array(["embedding_only"] * len(top_idx), dtype=object))
-
-
-# def _create_user_profile_from_history(
-#     context: RecommendationContext,
-#     user_idx: Optional[int] = None,
-# ) -> np.ndarray:
-#     """
-#     Create user embedding profile from interaction history or return catalog mean.
-
-#     Args:
-#         context: Immutable world state
-#         user_idx: User index (if None, returns catalog mean)
-
-#     Returns:
-#         user_profile: (embedding_dim,) embedding vector
-#     """
-#     if user_idx is None:
-#         return context["catalog_embeddings"].mean(axis=0)
-
-#     mappings = context["index_mappings"]
-#     user_row = context["train_matrix"][user_idx].toarray().flatten()
-#     rated_cf_indices = np.where(user_row > 0)[0]
-
-#     if len(rated_cf_indices) == 0:
-#         # Cold user: return global average
-#         logger.debug(f"[CB] No history for user, using catalog mean")
-#         return context["catalog_embeddings"].mean(axis=0)
-
-#     confidences = user_row[rated_cf_indices]
-
-#     # Convert CF indices to catalog indices
-#     rated_catalog_indices = np.array([mappings["cf_idx_to_catalog_id"][cf_idx] for cf_idx in rated_cf_indices])
-
-#     rated_embeddings = context["catalog_embeddings"][rated_catalog_indices]
-
-#     # Weighted average by confidence
-#     user_profile = np.average(rated_embeddings, axis=0, weights=confidences)
-
-#     return user_profile
 
 
 def _get_cold_catalog_indices(context: RecommendationContext) -> np.ndarray:

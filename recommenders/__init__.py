@@ -7,17 +7,17 @@ from .data_models import (
     IndexMappings,
     RecommendationContext,
     ModelConfig,
-    EvalConfig,
+    RecommendationConfig,
 )
 from .collaborative import get_collaborative_recommendations
 from .content_based import get_content_based_recommendations
-from .orchestrator import recommend
+from .handler import recommend
 
 __all__ = [
     "IndexMappings",
     "RecommendationContext",
     "ModelConfig",
-    "EvalConfig",
+    "RecommendationConfig",
     "get_collaborative_recommendations",
     "get_content_based_recommendations",
     "recommend",

@@ -211,7 +211,7 @@ __marimo__/
 
 # Custom directories
 archive/
-data/
+data*/
 logs/
 app_logs/
 node_modules/

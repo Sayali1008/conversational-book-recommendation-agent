@@ -297,85 +297,305 @@ Frontend Input:
 
 ## POST /swipe
 
+### Purpose & Design Philosophy
+
+The `/swipe` API is a **pure event logger** that records user interactions without triggering retraining, embedding rebuilds, or CF factor updates. Its goals are:
+
+1. **Log interactions**: Record user feedback (like/dislike) with confidence scores (1.0 for like, 0.0 for dislike)
+2. **Build audit trail**: Enable future batch retraining and analytics
+3. **Update lightweight user state**: Maintain in-session user preferences to inform immediate recommendations (no model changes)
+4. **Prefetch next batch**: Deliver smooth UX by proactively fetching recommendations while user swipes
+
+**Key constraint:** Swipes do NOT immediately alter pre-trained CF factors or trigger retraining. Instead:
+- Recommendations continue to use pre-computed factors (`user_factors`, `book_factors`)
+- Recent swipes are leveraged as **seed items** to guide content-based / cold-start recommendations
+- This keeps latency low and avoids model staleness issues
+
+---
+
 ### High-Level Flow
 
 ```
-User clicks 👍 or 👎 on a book
+User swipes right (👍) or left (👎) on a book
     ↓
 Frontend HTTP POST /swipe
   {
     "user_id": "A14OJS0VWMOSWO",
     "book_id": 101,
-    "action": "like",
-    "confidence": 1.0
+    "action": "like",  (or "dislike")
+    "confidence": null  (will be normalized by API)
   }
     ↓
 server/main.py: @app.post("/swipe")
+    ├─ Normalize confidence: 1.0 for "like", 0.0 for "dislike"
+    ├─ Log interaction to SQLite
+    ├─ Update lightweight user state (recent swipes)
+    └─ Prefetch next batch using recent swipes as seeds
     ↓
-Storage.log_swipe()  (write to SQLite)
-    ↓
-Fetch next recommendations via service.recommend()
-    ↓
-Return SwipeResponse with optional next batch
+Return SwipeResponse with next recommendations for seamless UX
 ```
 
 ---
 
 ### Detailed Flow
 
-#### **Step 1: User Interaction**
+#### **Step 1: Frontend Payload**
 
 ```
-Frontend (App.vue):
-  swipe(rec, action):
-    payload = {
-      "user_id": "A14OJS0VWMOSWO",
-      "book_id": 101,
-      "action": "like",  (or "dislike" or "superlike")
-      "confidence": 1.0
-    }
-    
-    POST http://localhost:8000/swipe
+User swipes on a book card:
+  - Swipe right (👍) → action = "like"
+  - Swipe left (👎) → action = "dislike"
+  
+Frontend normalizes to:
+  payload = {
+    "user_id": "A14OJS0VWMOSWO",
+    "book_id": 101,
+    "action": "like",
+    "confidence": null  (optional; API will set it)
+  }
+    ↓
+POST http://localhost:8000/swipe
+  with Content-Type: application/json
 ```
 
 ---
 
-#### **Step 2: Log Interaction**
+#### **Step 2: Confidence Normalization**
 
 ```
 server/main.py: @app.post("/swipe")
   ↓
+Validate SwipeRequest (action must be "like" or "dislike")
+  ↓
+Normalize confidence:
+  IF action == "like":
+    confidence = 1.0  (strong positive signal)
+  ELSE IF action == "dislike":
+    confidence = 0.0  (strong negative signal)
+  ELSE IF action == "superlike":
+    confidence = 1.0  (treat same as like for now)
+  ↓
+Result: confidence is always 0.0 or 1.0 (binary signal)
+```
+
+**Why binary confidence?**
+- Swipes are discrete gestures (yes/no), not gradients
+- Binary signals are more stable for downstream analytics
+- Reduces noise in future batch retraining
+
+---
+
+#### **Step 3: Log Interaction to SQLite**
+
+```
 Storage.log_swipe(user_id, book_id, action, confidence)
   ↓
 SQLite INSERT:
   INSERT INTO interactions (user_id, book_id, action, confidence, ts)
   VALUES ("A14OJS0VWMOSWO", 101, "like", 1.0, NOW())
   ↓
-Recorded for future training/analytics
+Record persisted with timestamp
+  ↓
+Schema:
+  id (INTEGER PRIMARY KEY AUTOINCREMENT)
+  user_id (TEXT) → User identifier
+  book_id (INTEGER) → Book ID from catalog
+  action (TEXT) → "like" or "dislike"
+  confidence (REAL) → 1.0 or 0.0
+  ts (DATETIME) → Auto-timestamp of interaction
+```
+
+**Purpose of logging:**
+- Build a complete audit trail of user behavior
+- Enable offline batch retraining when sufficient data accumulates
+- Support analytics and A/B testing (future)
+- No immediate effect on live recommendations
+
+---
+
+#### **Step 4: Update Lightweight User State**
+
+```
+Create or update in-memory user session state:
+  user_session_state[user_id] = {
+    "recent_likes": [101, 202, 303],     (last N liked books)
+    "recent_dislikes": [404, 505],        (last N disliked books)
+    "last_updated": timestamp,
+    "like_count": 3,
+    "dislike_count": 2
+  }
+  ↓
+Lightweight tracking without model changes:
+  - Does NOT update CF factors
+  - Does NOT recompute any vectors
+  - Purely tracks session feedback
+  ↓
+Benefits:
+  - Guides next recommendations via recent_likes as seed items
+  - Enables simple filtering (exclude recent_dislikes)
+  - Stays in memory; cleared on server restart
+```
+
+**Rationale:** Instead of retraining on every swipe, we use recent user feedback to bias the content-based recommendations. This is fast and reflects user's current session preferences without staleness.
+
+---
+
+#### **Step 5: Prefetch Next Batch Using Recent Swipes**
+
+```
+user_idx = UserRegistry.get_user_cf_idx(user_id)
+  ↓
+Retrieve recent_likes from user_session_state
+  ↓
+Convert recent_likes (book_ids) to seed_catalog_indices:
+  seed_catalog_indices = [5, 18, 42]  (recent liked books as seeds)
+  ↓
+Call service.recommend(
+  user_cf_idx=user_idx,
+  k=5,  (small batch for next card)
+  seed_catalog_indices=seed_catalog_indices
+)
+  ↓
+Recommendation flow:
+  IF user has CF history (warm):
+    - Use CF + seed embeddings for hybrid scoring
+    - Exclude recently swiped items (both likes and dislikes)
+  ELSE (cold user):
+    - Use seed embeddings or recent_likes as user profile
+    - Fallback to catalog mean if no seeds yet
+  ↓
+Return top-5 recommendations
+```
+
+**Key behavior:** The prefetch uses recent swipes to guide recommendations but does NOT incorporate them into CF factors. This means:
+- User preference drift is captured in seed items
+- Pre-trained CF patterns still drive ranking
+- No cold-start latency from model recomputation
+
+---
+
+#### **Step 6: Filter & Deduplicate**
+
+```
+Before returning results, filter out:
+  - Recently swiped items (exclude from both recent_likes and recent_dislikes)
+  - Duplicates (in case of prefetch overlap with previous batch)
+  ↓
+Ensure distinct, fresh recommendations
 ```
 
 ---
 
-#### **Step 3: Prefetch Next Batch (Optional)**
+#### **Step 7: Return SwipeResponse**
 
 ```
-Get user_cf_idx from user_id
-  ↓
-Call service.recommend(user_cf_idx, k=5)  (small batch for snappy UX)
-  ↓
-Follow same flow as GET /recommend
-  ↓
-Return SwipeResponse:
+Assemble response:
   {
     "status": "ok",
     "next_recommendations": [
-      {"book_id": 202, "title": "...", "score": 0.87, "source": "..."},
-      ...
+      {
+        "book_id": 202,
+        "title": "To Kill a Mockingbird",
+        "authors": ["Harper Lee"],
+        "score": 0.87,
+        "source": "hybrid",
+        "catalog_idx": 23
+      },
+      ...  (4 more items)
     ]
   }
   ↓
-Frontend displays next batch without requiring another button click
+HTTP 200 with JSON
+  ↓
+Frontend receives and immediately swaps in next card
 ```
+
+**UX benefit:** User does not wait for recommendation fetch after each swipe; next card is already available.
+
+---
+
+### Interaction Flow Diagram
+
+```
+Session Start:
+  user_session_state = {}
+
+Swipe 1: Like Book A
+  ↓ Log to DB: (user_id, book_A, "like", 1.0)
+  ↓ Update state: recent_likes = [A]
+  ↓ Prefetch using seed=[A]
+  ↓ Return next batch
+  ↓ User sees next card (already loaded)
+
+Swipe 2: Dislike Book B
+  ↓ Log to DB: (user_id, book_B, "dislike", 0.0)
+  ↓ Update state: recent_dislikes = [B], recent_likes = [A]
+  ↓ Prefetch using seed=[A], exclude=[B]
+  ↓ Return next batch
+  ↓ User sees next card
+
+Swipe 3: Like Book C
+  ↓ Log to DB: (user_id, book_C, "like", 1.0)
+  ↓ Update state: recent_likes = [A, C]
+  ↓ Prefetch using seed=[A, C], exclude=[B]
+  ↓ Return next batch
+  ↓ User sees next card
+  
+... (repeat as needed)
+
+At end of session:
+  - All interactions logged to SQLite
+  - Session state cleared
+  - Swipes available for batch retraining (offline, later)
+```
+
+---
+
+### What "Not Feeding Back to Live Scoring" Means
+
+**Current state:** Swipes are logged but do NOT immediately alter live recommendations via:
+- ❌ Updating CF factors (`user_factors`, `book_factors`)
+- ❌ Retraining CF model
+- ❌ Recomputing embeddings
+- ❌ Updating FAISS index
+
+**Why?** These operations are expensive and risky:
+- Retraining on every swipe → high latency, staleness, overfitting to noise
+- Updating global embeddings → affects all users, hard to rollback
+- Live factor updates → inconsistency across requests
+
+**What we DO instead:** Use swipes as lightweight signals:
+- ✅ Log to persistent storage (SQLite)
+- ✅ Track in-session preferences (recent_likes, recent_dislikes)
+- ✅ Seed content-based recommendations with recent likes
+- ✅ Filter out recent dislikes from candidate pool
+
+**Future work (batch retraining):**
+When you want to "feed back" swipes into the model:
+1. Collect swipes over time (e.g., 1-2 weeks of data)
+2. Run offline batch retraining: incorporate swipes into training matrix
+3. Recompute CF factors with new training data
+4. Redeploy updated factors with zero downtime
+5. Clear session state, start fresh cycle
+
+This decouples fast session-level feedback (seeds, filtering) from slow model-level learning (batch retraining).
+
+---
+
+### Summary: /swipe Responsibility Matrix
+
+| Responsibility              | Does It          | Notes                                           |
+| --------------------------- | ---------------- | ----------------------------------------------- |
+| Log interaction             | ✅ Yes            | Persists to SQLite with timestamp               |
+| Normalize confidence        | ✅ Yes            | 1.0 for like, 0.0 for dislike                   |
+| Update CF factors           | ❌ No             | Would require retraining                        |
+| Rebuild embeddings          | ❌ No             | Would affect all users, high latency            |
+| Track session state         | ✅ Yes            | In-memory recent_likes, recent_dislikes         |
+| Use swipes as seeds         | ✅ Yes            | Guides content-based recommendations            |
+| Filter recent swipes        | ✅ Yes            | Excludes them from next batch                   |
+| Prefetch next batch         | ✅ Yes            | k=5 for snappy UX                               |
+| Return next recommendations | ✅ Yes            | Allows seamless card transition                 |
+| Enable batch retraining     | ✅ Yes (indirect) | Logs provide data for future offline retraining |
 
 ---
 
@@ -404,12 +624,12 @@ If database error:
 
 ## Summary: Key Variable Transformations
 
-| Stage | Input | Process | Output |
-|-------|-------|---------|--------|
-| Frontend → API | `user_id` string | Lookup in `user_to_cf_idx` | `user_cf_idx` int |
-| Frontend → API | `seed_book_ids` list[int] | Lookup in `book_id_to_catalog_idx` | `seed_catalog_indices` list[int] |
-| CF Matrix | `user_cf_idx` | Index into `user_factors[cf_idx]` | User vector (dim=64) |
-| CF Matrix | `book_cf_idx` | Index into `book_factors[cf_idx]` | Book vector (dim=64) |
-| Embeddings | `catalog_idx` | Index into `catalog_embeddings[idx]` | Embedding vector (dim=384) |
-| Catalog | `catalog_idx` | Row access `catalog_df.iloc[idx]` | Book metadata (title, authors, etc.) |
-| Results | `catalog_idx` | Lookup `catalog_df.iloc[idx]["book_id"]` | Final API response with `book_id` |
+| Stage          | Input                     | Process                                  | Output                               |
+| -------------- | ------------------------- | ---------------------------------------- | ------------------------------------ |
+| Frontend → API | `user_id` string          | Lookup in `user_to_cf_idx`               | `user_cf_idx` int                    |
+| Frontend → API | `seed_book_ids` list[int] | Lookup in `book_id_to_catalog_idx`       | `seed_catalog_indices` list[int]     |
+| CF Matrix      | `user_cf_idx`             | Index into `user_factors[cf_idx]`        | User vector (dim=64)                 |
+| CF Matrix      | `book_cf_idx`             | Index into `book_factors[cf_idx]`        | Book vector (dim=64)                 |
+| Embeddings     | `catalog_idx`             | Index into `catalog_embeddings[idx]`     | Embedding vector (dim=384)           |
+| Catalog        | `catalog_idx`             | Row access `catalog_df.iloc[idx]`        | Book metadata (title, authors, etc.) |
+| Results        | `catalog_idx`             | Lookup `catalog_df.iloc[idx]["book_id"]` | Final API response with `book_id`    |
