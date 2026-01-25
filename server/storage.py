@@ -1,6 +1,7 @@
 import sqlite3
 from typing import Optional
 
+
 class Interactions:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -8,7 +9,8 @@ class Interactions:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS interactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
@@ -17,13 +19,33 @@ class Interactions:
                     confidence REAL,
                     ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """)
+            """
+            )
             conn.commit()
 
-    def log_swipe(self, user_id: str, book_id: int, action: str, confidence: Optional[float]):
+    def insert_swipe(self, user_id: str, book_id: int, action: str, confidence: Optional[float]):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO interactions (user_id, book_id, action, confidence) VALUES (?, ?, ?, ?)",
                 (user_id, book_id, action, confidence),
             )
             conn.commit()
+
+    def get_user_swiped_books(self, user_id: str, actions: Optional[list[str]] = None, limit: Optional[int] = None):
+        """Return interactions of book_ids the user has swiped (optionally filtered by action)."""
+        query = "SELECT * FROM interactions WHERE user_id = ?"
+        params = [user_id]
+        if actions:
+            placeholders = ",".join(["?"] * len(actions))
+            query += f" AND action IN ({placeholders})"
+            params.extend(actions)
+        query += " ORDER BY ts DESC"
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(query, params)
+            rows = cur.fetchall()
+            return rows

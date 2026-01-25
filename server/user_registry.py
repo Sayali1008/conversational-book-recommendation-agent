@@ -14,7 +14,7 @@ class UserRegistry:
         else:
             self.user_to_cf_idx, self.cf_idx_to_user = {}, {}
 
-    def get_user_cf_idx(self, user_id: Optional[str]) -> Optional[int]:
+    def get_user_cf(self, user_id: Optional[str]) -> Optional[int]:
         """Convert external user_id to CF matrix index. Returns None if unknown."""
         if not user_id:
             return None

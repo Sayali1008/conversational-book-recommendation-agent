@@ -12,11 +12,12 @@ import pandas as pd
 class IndexMappings(TypedDict):
     """Index mapping structures for converting between different ID spaces."""
 
-    cf_idx_to_catalog_id: Dict[int, int]  # CF matrix book index → catalog row index
-    user_to_cf_idx: Dict[Any, int]  # User ID → CF matrix user index
-    cf_idx_to_user: Dict[int, Any]  # CF matrix user index → User ID
-    cf_idx_to_book: Dict[int, int]  # CF matrix book index → Book ID
-    book_id_to_catalog_idx: Dict[int, int]  # Book ID → catalog row index
+    book_cf_to_catalog_id: Dict[int, int]  # CF matrix book index → catalog row index
+    user_id_to_cf: Dict[Any, int]  # User ID → CF matrix user index
+    cf_to_user_id: Dict[int, Any]  # CF matrix user index → User ID
+    book_id_to_cf: Dict[int, int]  # Book ID → CF matrix book index
+    cf_to_book_id: Dict[int, int]  # CF matrix book index → Book ID
+    book_id_to_catalog_id: Dict[int, int]  # Book ID → catalog row index
 
 
 class ModelConfig(TypedDict):
@@ -57,4 +58,3 @@ class RecommendationConfig(TypedDict):
     lambda_values: List[float]  # Lambda values to evaluate [0.0, 0.5, 1.0, ...]
     min_validation_items: int  # Minimum validation items required
     min_confidence: int  # Minimum confidence threshold
-    recency_boost: float  # Weight multiplier for recent session swipes (relative to training matrix confidence)

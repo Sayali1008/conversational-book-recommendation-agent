@@ -9,30 +9,30 @@ from typing import Tuple
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
+from common.constants import *
 from common.helpers import normalize_scores
+from common.utils import *
 
 from .data_models import RecommendationConfig, RecommendationContext
 
-logger = logging.getLogger(__name__)
+logger = setup_logging(__name__, PATHS["app_log_file"], logging.DEBUG)
 
 
 def get_collaborative_recommendations(
     context: RecommendationContext,
     config: RecommendationConfig,
-    user_idx: int,
-    k: int = 10,
-    exclude_catalog_rows: np.ndarray = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Generate hybrid CF + content recommendations for warm user.
+    user_cf,
+    k=10,
+    seed_book_ids=None,
+    swiped_books=None,
+):
+    """Generate hybrid CF + content recommendations for warm user."""
 
-    Args:
-        seed_catalog_indices: Optional recent swipes to boost user profile (e.g., from session state)
-    """
     mappings = context["index_mappings"]
     n_cf_books = len(context["book_factors"])
 
-    # Step 1: Compute collaborative filtering scores
-    user_vec = context["user_factors"][user_idx]
+    # Compute collaborative filtering scores
+    user_vec = context["user_factors"][user_cf]
     cf_scores = context["book_factors"].dot(user_vec)
     cf_scores = np.asarray(cf_scores).ravel()
 
@@ -40,39 +40,66 @@ def get_collaborative_recommendations(
 
     # Mask rated items
     if config["filter_rated"]:
-        user_train_row = context["train_matrix"][user_idx].toarray().flatten()
+        user_train_row = context["train_matrix"][user_cf].toarray().flatten()
         rated_cf_indices = np.where(user_train_row > 0)[0]
         logger.debug(f"[CF] User has {len(rated_cf_indices)} rated books")
         cf_scores[rated_cf_indices] = -np.inf
 
-    # Step 2: Select candidate pool
+    # Select candidate pool
     if config["candidate_pool_size"] is not None:
-        candidate_cf_book_indices = np.argsort(cf_scores)[::-1][: config["candidate_pool_size"]]
+        selected_book_cf_list = np.argsort(cf_scores)[::-1][: config["candidate_pool_size"]]
     else:
-        candidate_cf_book_indices = np.arange(n_cf_books)
+        selected_book_cf_list = np.arange(n_cf_books)
 
-    candidate_cf_book_indices = candidate_cf_book_indices[np.isfinite(cf_scores[candidate_cf_book_indices])]
-    logger.debug(f"[CF] {len(candidate_cf_book_indices)} candidates selected")
+    # Remove invalid scores
+    selected_book_cf_list = selected_book_cf_list[np.isfinite(cf_scores[selected_book_cf_list])]
 
-    if len(candidate_cf_book_indices) == 0:
+    # Remove swiped books to be excluded from selected recommendations
+    exclude_book_cf_set = set()
+    if swiped_books:
+        swiped_book_ids = [row["book_id"] for row in swiped_books]
+        for b in swiped_book_ids:
+            cf_id = mappings["book_id_to_cf"].get(b)
+            if cf_id is not None:
+                exclude_book_cf_set.add(cf_id)
+
+    selected_book_cf_list = [cf_id for cf_id in selected_book_cf_list if cf_id not in exclude_book_cf_set]
+    logger.debug(f"[CF] Removed {len(exclude_book_cf_set)} excluded items from candidate pool")
+    logger.debug(f"[CF] {len(selected_book_cf_list)} candidates selected")
+
+    if len(selected_book_cf_list) == 0:
         logger.debug(f"[CF] No candidates available")
         return np.array([], dtype=int), np.array([], dtype=float), np.array([], dtype=object)
 
-    # Step 3: Compute embedding scores on candidates
-    candidate_catalog_indices = np.array(
-        [mappings["cf_idx_to_catalog_id"][cf_idx] for cf_idx in candidate_cf_book_indices]
-    )
-    candidate_embeddings = context["catalog_embeddings"][candidate_catalog_indices]
+    # Compute embedding scores on candidates
+    selected_catalog_ids = np.array([mappings["book_cf_to_catalog_id"][cf_idx] for cf_idx in selected_book_cf_list])
+    selected_catalog_embeddings = context["catalog_embeddings"][selected_catalog_ids]
 
     logger.debug("[CF] Building user embedding profile for warm user")
+    seed_catalog_ids = set()
+    if seed_book_ids:
+        for b in seed_book_ids:
+            idx = mappings["book_id_to_catalog_id"].get(b)
+            if idx is not None:
+                seed_catalog_ids.add(idx)
+
+    # Add liked books to seed_book_ids to be used for profile building
+    liked_catalog_ids = set()
+    if swiped_books:
+        liked_book_ids = [row["book_id"] for row in swiped_books if row["action"] == "like"]
+        for b in liked_book_ids:
+            idx = mappings["book_id_to_catalog_id"].get(b)
+            if idx is not None:
+                liked_catalog_ids.add(idx)
+
     user_profile = _create_user_profile_from_history(
-        context, user_idx, exclude_catalog_rows=exclude_catalog_rows, recency_boost=config["recency_boost"]
+        context, user_cf, liked_catalog_ids=liked_catalog_ids, seed_catalog_ids=seed_catalog_ids
     )
 
-    embedding_scores = cosine_similarity(user_profile.reshape(1, -1), candidate_embeddings).flatten()
+    embedding_scores = cosine_similarity(user_profile.reshape(1, -1), selected_catalog_embeddings).flatten()
 
     # Step 4: Blend and rank
-    cf_scores_candidate = cf_scores[candidate_cf_book_indices]
+    cf_scores_candidate = cf_scores[selected_book_cf_list]
 
     cf_scores_norm = normalize_scores(cf_scores_candidate, config["norm"], config["norm_metadata"])
     embedding_scores_norm = normalize_scores(embedding_scores, config["norm"], config["norm_metadata"])
@@ -82,55 +109,83 @@ def get_collaborative_recommendations(
     sorted_idx = np.argsort(hybrid_scores)[::-1][:k]
 
     return (
-        candidate_catalog_indices[sorted_idx],
+        selected_catalog_ids[sorted_idx],
         hybrid_scores[sorted_idx],
         np.array(["hybrid"] * len(sorted_idx), dtype=object),
     )
 
 
-def _create_user_profile_from_history(context, user_idx, exclude_catalog_rows=None, recency_boost=2.0):
-    """
-    Create user's semantic profile from their rated books + recent session swipes.
-    Combines historical training data with recent swipes (if provided), giving more
-    weight to recent preferences to capture session-level intent.
-    """
+def _create_user_profile_from_history(
+    context, user_idx, liked_catalog_ids, seed_catalog_ids, seed_boost=1.0, likeness_boost=1.0
+):
+    """Create user's semantic profile from their rated books + swipes."""
     mappings = context["index_mappings"]
     user_row = context["train_matrix"][user_idx].toarray().flatten()
     rated_cf_book_indexes = np.where(user_row > 0)[0]
 
+    # Cold/new users: use seeds (preferred_catalog_ids) to avoid zero-vector profile
     if len(rated_cf_book_indexes) == 0:
+        if liked_catalog_ids or seed_catalog_ids:
+            liked_embeddings, seed_embeddings = [], []
+            liked_weights, seed_weights = [], []
+            if liked_catalog_ids and len(liked_catalog_ids) > 0:
+                liked_embeddings = context["catalog_embeddings"][list(liked_catalog_ids)]
+                liked_weights = np.full(len(liked_catalog_ids), likeness_boost)
+
+            if seed_catalog_ids and len(seed_catalog_ids) > 0:
+                seed_embeddings = context["catalog_embeddings"][list(seed_catalog_ids)]
+                seed_weights = np.full(len(seed_catalog_ids), seed_boost)
+
+            profile_embeddings = np.vstack([liked_embeddings, seed_embeddings])
+            profile_weights = np.concatenate([liked_weights, seed_weights])
+            user_profile = np.average(profile_embeddings, axis=0, weights=profile_weights)
+
+            logger.debug(
+                f"[CF] Cold user with {len(liked_catalog_ids)} liked books and {len(seed_catalog_ids)} seed books."
+            )
+            return user_profile
+
+        logger.debug(f"[CF] Cold user with no seeds or likes, returning zero-vector profile")
         return np.zeros(context["catalog_embeddings"].shape[1])
 
-    # Convert CF indices to catalog indices
-    rated_catalog_rows = np.array([mappings["cf_idx_to_catalog_id"][cf_idx] for cf_idx in rated_cf_book_indexes])
-    rated_embeddings = context["catalog_embeddings"][rated_catalog_rows]
+    rated_catalog_embeddings = []
+    confidences = []
+    if len(rated_cf_book_indexes) > 0:
+        # Weighted average by confidence
+        confidences = user_row[rated_cf_book_indexes]
 
-    # Weighted average by confidence
-    confidences = user_row[rated_cf_book_indexes]
+        # Convert CF indices to catalog indices
+        rated_catalog_ids = np.array([mappings["book_cf_to_catalog_id"][cf_idx] for cf_idx in rated_cf_book_indexes])
+        rated_catalog_embeddings = context["catalog_embeddings"][rated_catalog_ids]
 
-    # If recent swipes provided, combine historical + recent preferences
-    if exclude_catalog_rows is not None and len(exclude_catalog_rows) > 0:
-        logger.debug(f"[CF] Combining {len(rated_cf_book_indexes)} historical + {len(exclude_catalog_rows)} recent items")
+    # Contains seed + swiped likes
+    embedding_dim = context["catalog_embeddings"].shape[1]
+    liked_embeddings = np.empty((0, embedding_dim))  # Shape (0, 384)
+    if liked_catalog_ids and len(liked_catalog_ids) > 0:
+        liked_embeddings = context["catalog_embeddings"][list(liked_catalog_ids)]
 
-        # Get recent swipe embeddings
-        recent_embeddings = context["catalog_embeddings"][exclude_catalog_rows]
+    # Seed books
+    seed_embeddings = np.empty((0, embedding_dim))   # Shape (0, 384)
+    if seed_catalog_ids and len(seed_catalog_ids) > 0:
+        seed_embeddings = context["catalog_embeddings"][list(seed_catalog_ids)]
 
-        # Combine embeddings and weights
-        all_embeddings = np.vstack([rated_embeddings, recent_embeddings])
+    logger.debug(
+        f"[CF] Combining {len(rated_cf_book_indexes)} historical + {len(liked_catalog_ids) if liked_catalog_ids else 0} liked books + {len(seed_catalog_ids) if seed_catalog_ids else 0} + seed books"
+    )
 
-        # Give recent swipes higher weight (recency_boost)
-        historical_weights = confidences  # Original training confidences
-        recent_weights = np.full(len(exclude_catalog_rows), recency_boost)
-        all_weights = np.concatenate([historical_weights, recent_weights])
+    # Combine embeddings and weights
+    all_embeddings = np.vstack([rated_catalog_embeddings, liked_embeddings, seed_embeddings])
 
-        # Weighted average across all items
-        user_profile = np.average(all_embeddings, axis=0, weights=all_weights)
+    historical_weights = confidences  # Original training confidences
+    liked_weights = np.full(len(liked_catalog_ids) if liked_catalog_ids else 0, likeness_boost)
+    seed_weights = np.full(len(seed_catalog_ids) if seed_catalog_ids else 0, seed_boost)
+    all_weights = np.concatenate([historical_weights, liked_weights, seed_weights])
 
-        logger.debug(
-            f"[CF] User profile: historical weight={historical_weights.sum():.2f}, recent weight={recent_weights.sum():.2f}"
-        )
-    else:
-        # No recent swipes; use historical data only
-        user_profile = np.average(rated_embeddings, axis=0, weights=confidences)
+    # Weighted average across all items
+    user_profile = np.average(all_embeddings, axis=0, weights=all_weights)
+
+    logger.debug(
+        f"[CF] User profile: historical weight={historical_weights.sum():.2f}, liked weight={liked_weights.sum():.2f}, seed weight={seed_weights.sum():.2f}"
+    )
 
     return user_profile

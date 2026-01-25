@@ -76,5 +76,5 @@ def _get_cold_catalog_indices(context: RecommendationContext) -> np.ndarray:
     """Get indices of books NOT in the CF training set."""
     # These would be all the books for cold users
     n_catalog = context["catalog_embeddings"].shape[0]
-    warm_catalog = set(context["index_mappings"]["cf_idx_to_catalog_id"].values())
+    warm_catalog = set(context["index_mappings"]["book_cf_to_catalog_id"].values())
     return np.array([i for i in range(n_catalog) if i not in warm_catalog], dtype=int)

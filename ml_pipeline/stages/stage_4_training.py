@@ -53,10 +53,10 @@ def model_training(model, train_matrix):
     return model
 
 
-def test_predictions(user_factors, book_factors, user_cf_idx=0, k=10):
+def test_predictions(user_factors, book_factors, user_cf=0, k=10):
     try:
         # Get this user's factor vector
-        user_vec = user_factors[user_cf_idx]  # (64,)
+        user_vec = user_factors[user_cf]  # (64,)
 
         # Compute scores for all books: user_vec · book_factors^T
         scores = book_factors.dot(user_vec)  # (11591,)
@@ -65,7 +65,7 @@ def test_predictions(user_factors, book_factors, user_cf_idx=0, k=10):
         top_k_indices = np.argsort(scores)[::-1][:k]
         top_k_scores = scores[top_k_indices]
 
-        logger.info(f"Top {k} predictions for user {user_cf_idx} (manual calculation):")
+        logger.info(f"Top {k} predictions for user {user_cf} (manual calculation):")
         logger.info(f"Book indices: {top_k_indices}")
         logger.info(f"Scores: {top_k_scores}")
         logger.info(f"Score range: [{scores.min():.4f}, {scores.max():.4f}]")

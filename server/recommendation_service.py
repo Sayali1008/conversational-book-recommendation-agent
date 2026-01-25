@@ -8,7 +8,7 @@ import scipy.sparse as sp
 
 from common.constants import PATHS, RECOMMEND
 from common.utils import setup_logging, safe_read_feather, load_pickle
-from recommenders import RecommendationConfig, IndexMappings, RecommendationContext, recommend
+from recommenders import RecommendationConfig, IndexMappings, RecommendationContext, recommend_books
 
 logger = setup_logging(__name__, PATHS["app_log_file"])
 
@@ -58,29 +58,30 @@ class RecommendationService:
             # ===================================================================
             # Build Index Mappings
             # ===================================================================
-            user_to_cf_idx = load_pickle(PATHS["user_idx_pkl"])
-            cf_idx_to_user = {v: k for k, v in user_to_cf_idx.items()}
+            user_id_to_cf = load_pickle(PATHS["user_idx_pkl"])
+            cf_to_user_id = {v: k for k, v in user_id_to_cf.items()}
 
-            book_to_cf_idx = load_pickle(PATHS["book_idx_pkl"])
-            cf_idx_to_book = {v: k for k, v in book_to_cf_idx.items()}
+            book_id_to_cf = load_pickle(PATHS["book_idx_pkl"])
+            cf_to_book_id = {v: k for k, v in book_id_to_cf.items()}
 
             # Build catalog index mappings
-            book_id_to_catalog_idx = {int(row.book_id): i for i, row in catalog_df.reset_index(drop=True).iterrows()}
+            book_id_to_catalog_id = {int(row.book_id): i for i, row in catalog_df.reset_index(drop=True).iterrows()}
 
-            cf_idx_to_catalog_id = {}
-            for cf_idx, book_id in cf_idx_to_book.items():
-                if book_id in book_id_to_catalog_idx:
-                    cf_idx_to_catalog_id[cf_idx] = book_id_to_catalog_idx[book_id]
+            book_cf_to_catalog_id = {}
+            for cf_idx, book_id in cf_to_book_id.items():
+                if book_id in book_id_to_catalog_id:
+                    book_cf_to_catalog_id[cf_idx] = book_id_to_catalog_id[book_id]
 
-            logger.info(f"Built index mappings: {len(user_to_cf_idx)} users, {len(cf_idx_to_book)} books in CF")
+            logger.info(f"Built index mappings: {len(user_id_to_cf)} users, {len(cf_to_book_id)} books in CF")
 
             # Build RecommendationContext (immutable data)
             index_mappings: IndexMappings = {
-                "cf_idx_to_catalog_id": cf_idx_to_catalog_id,
-                "user_to_cf_idx": user_to_cf_idx,
-                "cf_idx_to_user": cf_idx_to_user,
-                "cf_idx_to_book": cf_idx_to_book,
-                "book_id_to_catalog_idx": book_id_to_catalog_idx,
+                "book_cf_to_catalog_id": book_cf_to_catalog_id,
+                "user_id_to_cf": user_id_to_cf,
+                "cf_to_user_id": cf_to_user_id,
+                "book_id_to_cf": book_id_to_cf,
+                "cf_to_book_id": cf_to_book_id,
+                "book_id_to_catalog_id": book_id_to_catalog_id,
             }
 
             self.context: RecommendationContext = {
@@ -99,7 +100,6 @@ class RecommendationService:
                 "k": RECOMMEND["k"],
                 "candidate_pool_size": RECOMMEND["candidate_pool_size"],
                 "filter_rated": RECOMMEND["filter_rated"],
-                "recency_boost": RECOMMEND["recency_boost"],
             }
 
             logger.info("✓ RecommendationService initialized successfully")
@@ -137,46 +137,41 @@ class RecommendationService:
             "error": self.init_error,
         }
 
-    def get_user_idx(self, user_id: Optional[str]) -> Optional[int]:
+    def get_user_cf(self, user_id: Optional[str]) -> Optional[int]:
         """Convert external user_id to CF matrix index."""
         if not self.ready:
             raise ValueError("Recommendation artifacts are not available")
         if not user_id:
             return None
-        return self.context["index_mappings"]["user_to_cf_idx"].get(user_id)
+        return self.context["index_mappings"]["user_id_to_cf"].get(user_id)
 
-    def user_has_history(self, user_cf_idx: Optional[int]) -> bool:
+    def user_has_history(self, user_cf: Optional[int]) -> bool:
         """Check if user has interaction history in training data."""
-        return user_cf_idx is not None and self.context["train_matrix"][user_cf_idx].nnz > 0
+        return user_cf is not None and self.context["train_matrix"][user_cf].nnz > 0
 
     def book_ids_to_catalog_indices(self, seed_book_ids: Optional[List[int]]) -> List[int]:
         """Convert book IDs to catalog row indices."""
         if not seed_book_ids:
             return []
         mappings = self.context["index_mappings"]
-        return [mappings["book_id_to_catalog_idx"][b] for b in seed_book_ids if b in mappings["book_id_to_catalog_idx"]]
+        return [mappings["book_id_to_catalog_id"][b] for b in seed_book_ids if b in mappings["book_id_to_catalog_id"]]
 
-    def recommend(self, user_cf_idx, k=10, exclude_catalog_rows=None):
+    def recommend(self, user_cf, k=10, seed_book_ids=None, swiped_books=None):
         if not self.ready:
             raise ValueError("Recommendation artifacts are not available")
-        logger.info(f"in recommend()")
 
-        warm = self.user_has_history(user_cf_idx)
-        logger.info(f"Generating {k} recommendations for user_idx={user_cf_idx}, is_warm={warm}")
-
-        # Convert exclusion list to numpy array if provided
-        exclude_catalog_array = None
-        if exclude_catalog_rows:
-            exclude_catalog_array = np.array(exclude_catalog_rows)
-
+        warm = self.user_has_history(user_cf)
+        logger.info(f"Generating {k} recommendations for user_idx={user_cf}, is_warm={warm}")
+        
         # Get recommendations
-        indices, scores, sources = recommend(
+        indices, scores, sources = recommend_books(
             context=self.context,
             config=self.config,
-            user_idx=user_cf_idx,
+            user_cf=user_cf,
             is_warm_user=warm,
             k=k,
-            exclude_catalog_rows=exclude_catalog_array,
+            seed_book_ids=seed_book_ids,
+            swiped_books=swiped_books,
         )
 
         # Determine strategy used

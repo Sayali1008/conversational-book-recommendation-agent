@@ -112,7 +112,6 @@ RECOMMEND = {
     "norm": "minmax",  # "minmax", "softmax", "zscore"
     "norm_metadata": None,  # Temperature for softmax (e.g., 0.01, 0.3, 0.9)
     "filter_rated": True,  # Exclude already-rated books from recommendations
-    "recency_boost": 2.0,  # Weight multiplier for recent session swipes (relative to training matrix confidence)
 }
 
 PATHS = {

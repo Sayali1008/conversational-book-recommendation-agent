@@ -12,7 +12,6 @@ class BookRecommendation(BaseModel):
 class RecommendResponse(BaseModel):
     recommendations: list[BookRecommendation]
     strategy: str
-    used_seeds: list[int] = []
 
 class SwipeRequest(BaseModel):
     """

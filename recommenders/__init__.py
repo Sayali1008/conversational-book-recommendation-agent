@@ -11,7 +11,7 @@ from .data_models import (
 )
 from .collaborative import get_collaborative_recommendations
 from .content_based import get_content_based_recommendations
-from .handler import recommend
+from .handler import recommend_books
 
 __all__ = [
     "IndexMappings",
@@ -20,5 +20,5 @@ __all__ = [
     "RecommendationConfig",
     "get_collaborative_recommendations",
     "get_content_based_recommendations",
-    "recommend",
+    "recommend_books",
 ]

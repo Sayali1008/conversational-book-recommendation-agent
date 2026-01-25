@@ -6,6 +6,8 @@
       <div v-if="book" class="modal-content">
         <h2 class="modal-title">{{ book.title }}</h2>
 
+        <p class="modal-id" v-if="book.book_id">Book ID: {{ book.book_id }}</p>
+
         <div v-if="book.authors && book.authors.length" class="modal-authors">
           <span class="modal-label">By:</span>
           {{ book.authors.join(', ') }}

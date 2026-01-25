@@ -89,15 +89,15 @@ def prepare_data():
     logger.info("CF-trainable books: %s", f"{n_cf_books:,}")
 
     # idx helps define the appearance order in ratings_df - hence can be used in reverse as well.
-    user_to_cf_idx = {user_id: idx for idx, user_id in enumerate(unique_users)}
-    book_to_cf_idx = {book_id: idx for idx, book_id in enumerate(unique_books)}
-    save_pickle(user_to_cf_idx, PATHS["user_idx_pkl"])
-    save_pickle(book_to_cf_idx, PATHS["book_idx_pkl"])
+    user_id_to_cf = {user_id: idx for idx, user_id in enumerate(unique_users)}
+    book_id_to_cf = {book_id: idx for idx, book_id in enumerate(unique_books)}
+    save_pickle(user_id_to_cf, PATHS["user_idx_pkl"])
+    save_pickle(book_id_to_cf, PATHS["book_idx_pkl"])
     logger.info("Index mappings saved.")
 
     # Add Index Columns to DataFrame
-    ratings_df["user_idx"] = ratings_df["user_id"].map(user_to_cf_idx)
-    ratings_df["book_idx"] = ratings_df["book_id"].map(book_to_cf_idx)
+    ratings_df["user_idx"] = ratings_df["user_id"].map(user_id_to_cf)
+    ratings_df["book_idx"] = ratings_df["book_id"].map(book_id_to_cf)
     assert ratings_df["user_idx"].notna().all(), "Some users failed to map to indices"
     assert ratings_df["book_idx"].notna().all(), "Some books failed to map to indices"
     logger.info("Index mapping complete.")
@@ -110,17 +110,8 @@ def prepare_data():
 
 
 def build_interaction_matrix(df, n_users, n_cf_books, binary=False):
-    """
-    Build sparse interaction matrix from DataFrame.
+    """Build sparse interaction matrix from DataFrame."""
 
-    Args:
-        df: DataFrame with columns ['user_idx', 'book_idx', 'confidence']
-        n_users: Total number of users
-        n_cf_books: Total number of books
-
-    Returns:
-        scipy.sparse.csr_matrix of shape (n_users, n_cf_books)
-    """
     # uses user_idx and book_idx to map confidences to correct user-book index combinations
 
     if binary:

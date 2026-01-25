@@ -47,6 +47,7 @@
                         <div class="book-meta">
                             <span class="meta-badge score">⭐ {{ rec.score.toFixed(2) }}</span>
                             <span class="meta-badge source">{{ rec.source }}</span>
+                            <span class="meta-badge source">ID: {{ rec.book_id }}</span>
                         </div>
                     </div>
 

@@ -77,33 +77,25 @@ def load_index_mappings(pkl_file):
     Load item index mappings from pickle files.
 
     Returns:
-        item_id_to_cf_idx: dict mapping item_id (book or user) → CF matrix column index
-        cf_idx_to_item_id: dict mapping CF matrix column index → item_id
+        item_id_to_cf: dict mapping item_id (book or user) → CF matrix column index
+        cf_to_item_id: dict mapping CF matrix column index → item_id
     """
     with open(pkl_file, "rb") as f:
-        item_id_to_cf_idx = pickle.load(f)
+        item_id_to_cf = pickle.load(f)
 
     # Create reverse mapping: CF index → item_id
-    cf_idx_to_item_id = {cf_idx: item_id for item_id, cf_idx in item_id_to_cf_idx.items()}
-    return item_id_to_cf_idx, cf_idx_to_item_id
+    cf_to_item_id = {cf_idx: item_id for item_id, cf_idx in item_id_to_cf.items()}
+    return item_id_to_cf, cf_to_item_id
 
 
-def map_book_cf_idx_to_catalog_index(cf_idx_to_book):
-    """
-    Build mapping from CF book indices to catalog indices.
+def map_book_cf_to_catalog_id(cf_to_book_id):
+    """Build mapping from CF book indices to catalog indices."""
+    cf_to_catalog_id = {}
+    for cf, book_id in cf_to_book_id.items():
+        catalog_id = book_id - 1  # book_id starts at 1, catalog indices start at 0
+        cf_to_catalog_id[cf] = catalog_id
 
-    Args:
-        cf_idx_to_book: Mapping from CF index to book_id
-
-    Returns:
-        dict: CF index → catalog index mapping
-    """
-    cf_idx_to_catalog_id_map = {}
-    for cf_idx, book_id in cf_idx_to_book.items():
-        catalog_idx = book_id - 1  # book_id starts at 1, catalog indices start at 0
-        cf_idx_to_catalog_id_map[cf_idx] = catalog_idx
-
-    return cf_idx_to_catalog_id_map
+    return cf_to_catalog_id
 
 
 def load_pickle(file_path: str):

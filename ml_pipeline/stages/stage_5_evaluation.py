@@ -23,8 +23,8 @@ def run_evaluation():
     catalog_embeddings = np.load(PATHS["catalog_books_embeddings"])
 
     logger.info("Loading mappings...")
-    _, cf_idx_to_book = load_index_mappings(PATHS["book_idx_pkl"])
-    cf_idx_to_catalog_id = map_book_cf_idx_to_catalog_index(cf_idx_to_book)
+    _, cf_to_book_id = load_index_mappings(PATHS["book_idx_pkl"])
+    book_cf_to_catalog_id = map_book_cf_to_catalog_id(cf_to_book_id)
 
     log_hyperparameters(logger)
 
@@ -49,8 +49,8 @@ def run_evaluation():
                 train_matrix,
                 val_matrix,
                 catalog_embeddings,
-                cf_idx_to_catalog_id,
-                cf_idx_to_book,
+                book_cf_to_catalog_id,
+                cf_to_book_id,
                 # norm=norm,
                 # norm_metadata=norm_metadata,
                 k=k,
@@ -76,8 +76,8 @@ def run_evaluation():
                 train_matrix,
                 test_matrix,
                 catalog_embeddings,
-                cf_idx_to_catalog_id,
-                cf_idx_to_book,
+                book_cf_to_catalog_id,
+                cf_to_book_id,
                 # norm=norm,
                 # norm_metadata=norm_metadata,
                 k=k,
@@ -112,8 +112,8 @@ def _build_recommendation_context(
     book_factors,
     train_matrix,
     catalog_embeddings,
-    cf_idx_to_catalog_id_map,
-    cf_idx_to_book,
+    book_cf_to_catalog_id,
+    cf_to_book_id,
 ):
     return {
         "user_factors": user_factors,
@@ -121,11 +121,12 @@ def _build_recommendation_context(
         "train_matrix": train_matrix,
         "catalog_embeddings": catalog_embeddings,
         "index_mappings": {
-            "cf_idx_to_catalog_id": cf_idx_to_catalog_id_map,
-            "user_to_cf_idx": {},
-            "cf_idx_to_user": {},
-            "cf_idx_to_book": cf_idx_to_book,
-            "book_id_to_catalog_idx": {},
+            "book_cf_to_catalog_id": book_cf_to_catalog_id,
+            "user_id_to_cf": {},
+            "cf_to_user_id": {},
+            "book_cf_to_id": {book_id: cf_id for cf_id, book_id in cf_to_book_id.items()},
+            "cf_to_book_id": cf_to_book_id,
+            "book_id_to_catalog_id": {},
         },
         "catalog_df": None,
     }
@@ -138,7 +139,6 @@ def _build_recommendation_config(
     k,
     candidate_pool_size,
     filter_rated,
-    recency_boost,
 ):
     """Create RecommendationConfig dictionary expected by recommenders/ functions."""
     return {
@@ -148,7 +148,6 @@ def _build_recommendation_config(
         "k": k,
         "candidate_pool_size": candidate_pool_size,
         "filter_rated": filter_rated,
-        "recency_boost": recency_boost,
     }
 
 
@@ -158,8 +157,8 @@ def evaluate(
     train_matrix,
     eval_matrix,
     catalog_embeddings,
-    cf_idx_to_catalog_id_map,
-    cf_idx_to_book,
+    book_cf_to_catalog_id,
+    cf_to_book_id,
     k,
     lambda_weight,
 ):
@@ -197,10 +196,10 @@ def evaluate(
             continue
 
         # Convert CF indices to catalog indices for comparison
-        eval_catalog_indices = set(cf_idx_to_catalog_id_map[cf_idx] for cf_idx in cf_indices)
+        eval_catalog_indices = set(book_cf_to_catalog_id[cf_idx] for cf_idx in cf_indices)
 
         context: RecommendationContext = _build_recommendation_context(
-            user_factors, book_factors, train_matrix, catalog_embeddings, cf_idx_to_catalog_id_map, cf_idx_to_book
+            user_factors, book_factors, train_matrix, catalog_embeddings, book_cf_to_catalog_id, cf_to_book_id
         )
 
         config: RecommendationConfig = _build_recommendation_config(
@@ -210,12 +209,11 @@ def evaluate(
             k,
             EVALUATION.get("candidate_pool_size"),
             EVALUATION.get("filter_rated", True),
-            RECOMMEND["recency_boost"],
         )
 
         if EVALUATION["type"] == "CB":
             exclude_indices = (
-                _get_rated_catalog_indices(train_matrix, user_idx, cf_idx_to_catalog_id_map)
+                _get_rated_catalog_indices(train_matrix, user_idx, book_cf_to_catalog_id)
                 if config["filter_rated"]
                 else set()
             )
@@ -233,7 +231,7 @@ def evaluate(
             top_k_catalog_indices, _, _ = collaborative.get_collaborative_recommendations(
                 context=context,
                 config=config,
-                user_idx=user_idx,
+                user_cf=user_idx,
                 k=k,
             )
 
@@ -258,8 +256,8 @@ def evaluate(
     }
 
 
-def _get_rated_catalog_indices(train_matrix, user_idx, cf_idx_to_catalog_id_map):
+def _get_rated_catalog_indices(train_matrix, user_idx, book_cf_to_catalog_id):
     """Return catalog indices the user has already interacted with."""
     row = train_matrix[user_idx].toarray().flatten()
     rated_cf_indices = np.where(row > 0)[0]
-    return {cf_idx_to_catalog_id_map[cf_idx] for cf_idx in rated_cf_indices}
+    return {book_cf_to_catalog_id [cf_idx] for cf_idx in rated_cf_indices}

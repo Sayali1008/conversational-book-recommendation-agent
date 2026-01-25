@@ -16,14 +16,14 @@ from .content_based import _get_cold_catalog_indices, get_content_based_recommen
 logger = setup_logging(__name__, PATHS["app_log_file"])
 
 
-def recommend(context, config, user_idx, is_warm_user, k=10, exclude_catalog_rows=None):
+def recommend_books(context, config, user_cf, is_warm_user, k=10, seed_book_ids=None, swiped_books=None):
     """
     Generate recommendations.
     - Warm users: Get hybrid (CF + content) recommendations, use cold as fallback
     - Cold users: Get content-based recommendations only
     """
 
-    logger.info(f"is_warm_user={is_warm_user}, user_idx={user_idx}, k={k}")
+    logger.info(f"is_warm_user={is_warm_user}, user_cf={user_cf}, k={k}")
 
     # ===================================================================
     # WARM USER: Get hybrid recommendations with cold fallback
@@ -35,40 +35,47 @@ def recommend(context, config, user_idx, is_warm_user, k=10, exclude_catalog_row
         warm_indices, warm_scores, warm_sources = get_collaborative_recommendations(
             context=context,
             config=config,
-            user_idx=user_idx,
+            user_cf=user_cf,
             k=k,
-            exclude_catalog_rows=exclude_catalog_rows,
+            seed_book_ids=seed_book_ids,
+            swiped_books=swiped_books,
         )
         logger.info(f"Warm recommender returned {len(warm_indices)} items")
         if len(warm_indices) > 0:
             logger.info(f"  → warm_scores: {warm_scores[:min(3, len(warm_scores))]}")
 
-        exclude_rows = set(warm_indices.tolist())
-
-        # Add session-level exclusions (e.g., recently swiped items)
-        if exclude_catalog_rows is not None:
-            exclude_rows.update(
-                exclude_catalog_rows.tolist() if isinstance(exclude_catalog_rows, np.ndarray) else exclude_catalog_rows
-            )
+        # Build catalog-level exclusion set
+        exclude_rows = set()
+        if swiped_books:
+            swiped_book_ids = [row["book_id"] for row in swiped_books]
+            mapping = context["index_mappings"]["book_id_to_catalog_id"]
+            for b in swiped_book_ids:
+                cat = mapping.get(b)
+                if cat is not None:
+                    exclude_rows.add(cat)
 
         # Add rated items to exclusions
         if config["filter_rated"]:
-            user_row = context["train_matrix"][user_idx].toarray().flatten()
+            user_row = context["train_matrix"][user_cf].toarray().flatten()
             rated_cf_indices = np.where(user_row > 0)[0]
             rated_catalog_indices = {
-                context["index_mappings"]["cf_idx_to_catalog_id"][cf_idx] for cf_idx in rated_cf_indices
+                context["index_mappings"]["book_cf_to_catalog_id"][cf_idx] for cf_idx in rated_cf_indices
             }
             exclude_rows.update(rated_catalog_indices)
-        
-        logger.info(f"Excluding {len(exclude_rows)} items (rated + warm + session swipes)")
+
+        # Filter warm outputs against exclusions
+        if len(warm_indices) > 0:
+            keep_mask = np.array([idx not in exclude_rows for idx in warm_indices])
+            warm_indices = warm_indices[keep_mask]
+            warm_scores = warm_scores[keep_mask]
+            warm_sources = warm_sources[keep_mask]
+
+        logger.info(f"Excluding {len(exclude_rows)} items (rated + swipes)")
 
         # Check if we have enough warm recommendations
         if len(warm_indices) >= k:
-            # Enough warm recommendations, return only those
             logger.info(f"Warm items ({len(warm_indices)}) >= k ({k}), returning ONLY warm")
-            final_indices = warm_indices
-            final_scores = warm_scores
-            final_sources = warm_sources
+            final_indices, final_scores, final_sources = warm_indices[:k], warm_scores[:k], warm_sources[:k]
         else:
             # Need fallback cold items
             n_needed = k - len(warm_indices)
@@ -102,12 +109,13 @@ def recommend(context, config, user_idx, is_warm_user, k=10, exclude_catalog_row
         logger.info(f"Going on a cold user path")
 
         exclude_rows = set()
-
-        # Add session-level exclusions (e.g., recently swiped items)
-        if exclude_catalog_rows is not None:
-            exclude_rows.update(
-                exclude_catalog_rows.tolist() if isinstance(exclude_catalog_rows, np.ndarray) else exclude_catalog_rows
-            )
+        if swiped_books:
+            swiped_book_ids = [row["book_id"] for row in swiped_books]
+            mapping = context["index_mappings"]["book_id_to_catalog_id"]
+            for b in swiped_book_ids:
+                cat = mapping.get(b)
+                if cat is not None:
+                    exclude_rows.add(cat)
 
         final_indices, final_scores, final_sources = get_content_based_recommendations(
             context=context,
