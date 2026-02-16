@@ -11,19 +11,20 @@ This document traces the complete execution flow for API requests, from frontend
 ```
 User clicks "Get Recommendations" button
     ↓
-Frontend HTTP GET /recommend?user_id=...&k=10&seed_book_ids=...
+Frontend HTTP GET /recommend?user_id=...&k=10
     ↓
 server/main.py: @app.get("/recommend")
     ↓
 RecommendationService.recommend()
     ↓
-_hybrid_recommender.recommend_with_cold_start()
+Determine user state: Is user warm/semi-warm/cold?
+    ├─ WARM: in CF training matrix
+    ├─ SEMI-WARM: has swiped books but not in matrix
+    └─ COLD: no history, use genre preferences
     ↓
-Determine: Is user warm or cold?
-    ├─ WARM: Call hybrid_recommender() (CF + embeddings)
-    └─ COLD: Use seed embeddings or catalog mean
+Build dynamic user profile based on state
     ↓
-Merge & rank results
+Get recommendations from handler.get_recommendations()
     ↓
 Convert to BookRecommendation objects
     ↓
@@ -48,77 +49,80 @@ Frontend Code (App.vue):
 
 ---
 
-#### **Step 2: API Entry Point**
+#### **Step 2: API Entry Point & Payload**
 
 ```
 server/main.py: @app.get("/recommend")
 
 Input validation:
-  user_id: Optional[str] = "A14OJS0VWMOSWO"
+  user_id: Optional[str] = "A14OJS0VWMOSWO"  (optional, for registered users)
   k: int = 10
-  seed_book_ids: Optional[str] = "101,202,303"
 
-Parsing:
-  seeds = [101, 202, 303]  (split comma-separated string)
+Assemble payload:
+  payload = {"user_id": user_id, "k": k}
+  
+Forward to endpoint handler: endpoint_recommendations.recommend(service, idb, payload)
 ```
 
 ---
 
-#### **Step 3: Convert user_id to user_cf_idx**
+#### **Step 3: Fetch Swiped Books from Database**
 
 ```
-UserRegistry.get_user_idx("A14OJS0VWMOSWO")
+Endpoint calls idb.get_user_swiped_books(user_id)
   ↓
-Lookup in self.user_to_cf_idx dictionary (loaded from USER_IDX_PKL)
-  user_to_cf_idx = {
-    "A14OJS0VWMOSWO": 42,
-    "AFVQZQ8PW0L": 15,
-    ...
-  }
+Queries interactions table: SELECT * FROM interactions WHERE user_id = ?
   ↓
-user_cf_idx = 42  (or None if user not in training data)
+Returns: list of dicts with {book_id, action, confidence, ts}
+  ↓
+Passes swiped_books to service.recommend()
 ```
-
-**Variable mapping:**
-- Input: `user_id` (string from frontend)
-- Output: `user_cf_idx` (integer, row in user_factors matrix)
 
 ---
 
-#### **Step 4: Convert seed book_ids to catalog_indices**
+#### **Step 4: Determine User State**
 
 ```
-RecommendationService.book_ids_to_catalog_indices([101, 202, 303])
+RecommendationService.recommend(user_id, top_k, swiped_books)
   ↓
-For each book_id, lookup in self.book_id_to_catalog_idx:
-  book_id_to_catalog_idx = {
-    101: 5,    (book_id 101 is at row 5 in catalog_df and embeddings)
-    202: 18,
-    303: 42,
-    ...
-  }
-  ↓
-seed_catalog_indices = [5, 18, 42]
-```
+user_cf = self.get_user_cf(user_id)
+  → Lookup in index_mappings["user_id_to_cf"] (from CF training data)
+  
+in_matrix = self.user_has_history(user_cf)
+  → Check if user_cf row in train_matrix has interactions
+  
+has_interactions = len(swiped_books) > 0
+  → Check if user has swiped any books this session
 
-**Variable mapping:**
-- Input: `seed_book_ids` = [101, 202, 303] (book IDs from user)
-- Output: `seed_catalog_indices` = [5, 18, 42] (rows in embeddings array)
+Determine state:
+  ├─ is_warm = in_matrix (user in CF training data)
+  ├─ is_semi_warm = not in_matrix AND has_interactions (swiped but not in training)
+  └─ is_cold = not in_matrix AND not has_interactions (no history at all)
+```
 
 ---
 
-#### **Step 5: Check if User is Warm**
+#### **Step 5: Build User Profile**
 
 ```
-RecommendationService.recommend(user_cf_idx=42, k=10, seed_catalog_indices=[5,18,42])
-  ↓
-self.user_has_history(user_cf_idx=42)
-  ↓
-Check: self.train_matrix[42].nnz > 0  (does row 42 have any interactions?)
-  ↓
-Result:
-  - If YES → user is WARM (has rated books before)
-  - If NO → user is COLD (new user or not in training data)
+User profile building depends on user state:
+
+  IF warm user:
+    user_profile = None  (None signals CF factors will be used)
+    
+  ELSE IF semi_warm user:
+    user_profile = self.build_interaction_based_profile(swiped_books)
+    → For each swiped book, get its embedding
+    → Likes: weighted positive (+1.0)
+    → Dislikes: weighted negative (-0.5)
+    → Average to single profile vector
+    
+  ELSE (cold user):
+    user_profile = self.build_genre_based_profile(user_id)
+    → Query user_genres table
+    → Find popular books in those genres (by rating count)
+    → Get embeddings of those books
+    → Average to single profile vector
 ```
 
 ---
@@ -143,114 +147,92 @@ Call hybrid_recommender() for warm path:
   │  ├─ CF scores via minmax → [0, 1]
   │  └─ Embedding scores via minmax → [0, 1]
   ├─ Hybrid blend: 0.5 * cf_norm + 0.5 * emb_norm
-  ├─ Mask already-rated items (set to -inf)
-  └─ Return: top_k_indices, top_k_scores, ["hybrid"]*k
-
-Result:
-  warm_indices = [42, 15, 89, ...] (catalog_indices)
-  warm_scores = [0.95, 0.87, 0.82, ...] (hybrid scores)
-  warm_sources = ["hybrid", "hybrid", ...]
-```
-
 ---
 
-#### **Step 6B: COLD User Path**
-
-If `user_cf_idx=None` or user is cold:
+#### **Step 6: Get Recommendations**
 
 ```
-_hybrid_recommender.recommend_with_cold_start(
-  user_idx=None,
-  is_warm_user=False,
-  seed_catalog_indices=[5, 18, 42],  (from Step 4)
-  ...
+Call recommenders.handler.get_recommendations(
+  context=self.context,
+  user_cf=user_cf,
+  candidate_pool_size=best_rec_params["candidate_pool_size"],
+  lambda_weight=best_rec_params["lambda"],
+  is_warm_user=is_warm,
+  top_k=top_k,
+  swiped_books=swiped_books,
+  user_profile=user_profile
 )
   ↓
-Build user profile:
-  IF seed_catalog_indices provided:
-    user_profile = Mean of embeddings[5], embeddings[18], embeddings[42]
-  ELSE IF no seeds:
-    user_profile = Mean of all embeddings (very weak prior)
+Inside get_recommendations():
+  
+  # Build exclusion set (items to filter out)
+  exclusions = _build_exclusions(user_cf, swiped_books)
+    → Items from user's CF history + recent swipes
+  
+  # Cold user path: content-based only
+  IF not is_warm_user:
+    Get content-based scores using user_profile
+    Return top_k items
+    
+  # Warm user path: hybrid (CF + embeddings)
+  ELSE:
+    Get CF scores: book_factors.dot(user_factors[user_cf])
+    Build user profile from recent swipes (likes boosted, dislikes penalized)
+    Get content-based scores using profile
+    Normalize both scores
+    Hybrid blend: (lambda * cf_norm) + ((1-lambda) * cb_norm)
+    Return top_k items
   ↓
-Call embedding_only_recommender():
-  ├─ Get embeddings for all catalog items
-  ├─ Compute cosine similarity: user_profile · all_embeddings.T
-  ├─ Normalize scores via minmax → [0, 1]
-  └─ Return: top_k_indices, top_k_scores
-
-Result:
-  cold_indices = [23, 67, 51, ...] (catalog_indices)
-  cold_scores = [0.92, 0.85, 0.78, ...] (embedding scores only)
-  cold_sources = ["embedding_only", "embedding_only", ...]
+Final: indices (catalog indices), scores (final scores)
 ```
 
 ---
 
-#### **Step 7: Merge Warm & Cold Results**
+#### **Step 7: Format Recommendations**
 
 ```
-recommend_with_cold_start() merges both paths:
-  ↓
-all_indices = concatenate(warm_indices, cold_indices)
-all_scores = concatenate(warm_scores, cold_scores)
-all_sources = concatenate(warm_sources, cold_sources)
-  ↓
-Sort by score descending and take top-k:
-  order = argsort(all_scores)[::-1][:k]
-  final_indices = all_indices[order]
-  final_scores = all_scores[order]
-  final_sources = all_sources[order]
-  ↓
-Return: (final_indices, final_scores, final_sources)
-```
-
-**Key insight:** If user is warm, warm results come first. Cold items fill the remaining slots.
-
----
-
-#### **Step 8: Convert Indices to Book Details**
-
-```
-Back in server/main.py:
-
-For each catalog_idx in final_indices:
-  row = catalog_df.iloc[catalog_idx]  (get row from cleaned books dataframe)
-  ↓
+For each (index, score) pair:
+  row = self.context["catalog_df"].iloc[index]
+  
   Extract:
-    book_id = int(row["book_id"])  (original book ID from raw data)
+    book_id = int(row["book_id"])
     title = row["title"]
-    score = final_scores[i]  (hybrid or embedding score)
-    source = final_sources[i]  ("hybrid" or "embedding_only")
-  ↓
-  Create BookRecommendation object:
+    authors = row["authors"]  (parse if string)
+    score = float(score)
+  
+  Create dict:
     {
-      "book_id": 101,
-      "title": "The Great Gatsby",
-      "score": 0.95,
-      "source": "hybrid"
+      "book_id": book_id,
+      "catalog_idx": index,
+      "title": title,
+      "authors": authors,
+      "score": score
     }
+  ↓
+Return: recs (list of dicts), strategy ("hybrid" or "content_based")
 ```
-
-**Variable mapping:**
-- Input: `catalog_idx` = 5 (row in embeddings/catalog_df)
-- Lookup: `catalog_df.iloc[5]["book_id"]` → 101
-- Output: Recommendation with `book_id=101, title=...`
 
 ---
 
-#### **Step 9: Return Response**
+#### **Step 8: Return Response**
 
 ```
+Convert recs to BookRecommendation objects:
+  recommendations = [BookRecommendation(**r) for r in recs]
+  
 Assemble RecommendResponse:
   {
     "recommendations": [
-      {"book_id": 101, "title": "The Great Gatsby", "score": 0.95, "source": "hybrid"},
-      {"book_id": 202, "title": "To Kill a Mockingbird", "score": 0.87, "source": "hybrid"},
-      {"book_id": 303, "title": "Pride and Prejudice", "score": 0.82, "source": "embedding_only"},
-      ...
+      {
+        "book_id": 101,
+        "catalog_idx": 5,
+        "title": "The Great Gatsby",
+        "authors": ["F. Scott Fitzgerald"],
+        "score": 0.95
+      },
+      ...  (more items)
     ],
-    "strategy": "warm_hybrid",  (or "cold_embed" or "mixed")
-    "used_seeds": [5, 18, 42]
+    "strategy": "hybrid"  or "content_based"
   }
   ↓
 HTTP 200 with JSON response
@@ -260,20 +242,30 @@ Frontend receives and displays results
 
 ---
 
-### Complete Variable Mapping Chain
+### Complete User State Flow
 
 ```
-Frontend Input:
-  user_id = "A14OJS0VWMOSWO"
-  seed_book_ids = [101, 202, 303]
-  
-  ↓ Step 3
-  
-  user_cf_idx = 42  (from user_to_cf_idx lookup)
-  
-  ↓ Step 4
-  
-  seed_catalog_indices = [5, 18, 42]  (from book_id_to_catalog_idx lookup)
+Warm User (in CF training matrix):
+  swiped_books = [interactions from DB]
+  user_profile = profile from recent swipes
+  ↓
+  Hybrid: CF factors dominate, swipes refine
+  Strategy: "hybrid"
+
+Semi-Warm User (not in matrix, but has swipes):
+  swiped_books = [recent swipes]
+  user_profile = weighted average of swap embeddings
+  ↓
+  Content-Based: pure semantic similarity from swipes
+  Strategy: "content_based"
+
+Cold User (no history):
+  swiped_books = []
+  user_profile = genre-based embeddings
+  ↓
+  Content-Based: semantic similarity from genres
+  Strategy: "content_based"
+```
   
   ↓ Steps 5-7
   
@@ -413,75 +405,35 @@ Schema:
 
 ---
 
-#### **Step 4: Update Lightweight User State**
+#### **Step 4: Fetch Historical Swipes & Build User Profile**
 
 ```
-Create or update in-memory user session state:
-  user_session_state[user_id] = {
-    "recent_likes": [101, 202, 303],     (last N liked books)
-    "recent_dislikes": [404, 505],        (last N disliked books)
-    "last_updated": timestamp,
-    "like_count": 3,
-    "dislike_count": 2
-  }
+Retrieve all swiped books from database:
+  all_swiped = db.get_user_swiped_books(user_id)
   ↓
-Lightweight tracking without model changes:
-  - Does NOT update CF factors
-  - Does NOT recompute any vectors
-  - Purely tracks session feedback
-  ↓
-Benefits:
-  - Guides next recommendations via recent_likes as seed items
-  - Enables simple filtering (exclude recent_dislikes)
-  - Stays in memory; cleared on server restart
+Dynamically build user profile:
+  - If warm user: use CF factors + embeddings from swipes
+  - If semi-warm user: use embeddings from swipes + genres
+  - If cold user: use genre embeddings + now 1 swipe
 ```
 
-**Rationale:** Instead of retraining on every swipe, we use recent user feedback to bias the content-based recommendations. This is fast and reflects user's current session preferences without staleness.
+**Rationale:** User profile evolves naturally with each swipe. No model updates, no session state, just fresh profile generation from stored interactions.
 
 ---
 
-#### **Step 5: Prefetch Next Batch Using Recent Swipes**
+#### **Step 5: Generate Fresh Recommendations**
 
 ```
-user_idx = UserRegistry.get_user_cf_idx(user_id)
-  ↓
-Retrieve recent_likes from user_session_state
-  ↓
-Convert recent_likes (book_ids) to seed_catalog_indices:
-  seed_catalog_indices = [5, 18, 42]  (recent liked books as seeds)
-  ↓
 Call service.recommend(
-  user_cf_idx=user_idx,
-  k=5,  (small batch for next card)
-  seed_catalog_indices=seed_catalog_indices
+  user_id=user_id,
+  top_k=k,
+  swiped_books=all_swiped
 )
   ↓
-Recommendation flow:
-  IF user has CF history (warm):
-    - Use CF + seed embeddings for hybrid scoring
-    - Exclude recently swiped items (both likes and dislikes)
-  ELSE (cold user):
-    - Use seed embeddings or recent_likes as user profile
-    - Fallback to catalog mean if no seeds yet
-  ↓
-Return top-5 recommendations
-```
-
-**Key behavior:** The prefetch uses recent swipes to guide recommendations but does NOT incorporate them into CF factors. This means:
-- User preference drift is captured in seed items
-- Pre-trained CF patterns still drive ranking
-- No cold-start latency from model recomputation
-
----
-
-#### **Step 6: Filter & Deduplicate**
-
-```
-Before returning results, filter out:
-  - Recently swiped items (exclude from both recent_likes and recent_dislikes)
-  - Duplicates (in case of prefetch overlap with previous batch)
-  ↓
-Ensure distinct, fresh recommendations
+Inside recommend():
+  - Build dynamic user profile from database
+  - Generate candidates while excluding swiped items
+  - Return top-k per strategy (hybrid or content-based)
 ```
 
 ---
@@ -517,17 +469,21 @@ Frontend receives and immediately swaps in next card
 ### Interaction Flow Diagram
 
 ```
-Session Start:
-  user_session_state = {}
-
 Swipe 1: Like Book A
   ↓ Log to DB: (user_id, book_A, "like", 1.0)
-  ↓ Update state: recent_likes = [A]
-  ↓ Prefetch using seed=[A]
+  ↓ Fetch all swipes from DB: [A]
+  ↓ Build profile from A + genres
+  ↓ Generate recommendations
   ↓ Return next batch
-  ↓ User sees next card (already loaded)
+  ↓ User sees next card
 
 Swipe 2: Dislike Book B
+  ↓ Log to DB: (user_id, book_B, "dislike", 0.0)
+  ↓ Fetch all swipes from DB: [A, B]
+  ↓ Build profile: like(A) - dislike(B)
+  ↓ Generate recommendations
+  ↓ Return next batch
+```
   ↓ Log to DB: (user_id, book_B, "dislike", 0.0)
   ↓ Update state: recent_dislikes = [B], recent_likes = [A]
   ↓ Prefetch using seed=[A], exclude=[B]

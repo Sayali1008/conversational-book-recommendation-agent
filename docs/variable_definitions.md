@@ -92,32 +92,35 @@ Combine → cf_idx_to_catalog_id_map: {book_cf_idx: catalog_idx}
 
 ### Example User Flow
 
-**Scenario:** User "john_doe" likes books 101, 202, 303
+**Scenario:** User "john_doe" has swiped some books and now requests recommendations
 
 ```
 Frontend Input:
   user_id = "john_doe"
-  seed_book_ids = [101, 202, 303]
+  k = 10
 
 ↓
 
-API receives and processes:
+API processes:
   user_id = "john_doe"
   
-  UserRegistry.get_user_idx("john_doe")
-    → user_to_cf_idx["john_doe"] = 15
-    → user_cf_idx = 15
+  Endpoint fetches: idb.get_user_swiped_books("john_doe")
+    → Returns: [{book_id: 101, action: "like"}, {book_id: 202, action: "dislike"}, ...]
   
-  Service.book_ids_to_catalog_indices([101, 202, 303])
-    → book_id_to_catalog_idx[101] = 5
-    → book_id_to_catalog_idx[202] = 18
-    → book_id_to_catalog_idx[303] = 42
-    → seed_catalog_indices = [5, 18, 42]
+  Service looks up: index_mappings["user_id_to_cf"].get("john_doe")
+    → user_cf = 15 (or None if not in training data)
+  
+  Service builds profile:
+    - If in training matrix (warm): profile = None (uses CF factors)
+    - If not in matrix but has swipes (semi-warm): profile from swipes
+    - If no history (cold): profile from genres
 
 ↓
 
 Recommendation:
-  Average embeddings[5], embeddings[18], embeddings[42]
+  Hybrid (if warm): blend CF + embeddings
+  Content-based (if semi-warm/cold): semantic similarity from profile
+```
     → user_profile vector
   
   Score all items, rank by similarity

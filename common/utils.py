@@ -84,7 +84,7 @@ def load_index_mappings(pkl_file):
         item_id_to_cf = pickle.load(f)
 
     # Create reverse mapping: CF index → item_id
-    cf_to_item_id = {cf_idx: item_id for item_id, cf_idx in item_id_to_cf.items()}
+    cf_to_item_id = {int(cf_idx): int(item_id) for item_id, cf_idx in item_id_to_cf.items()}
     return item_id_to_cf, cf_to_item_id
 
 
@@ -92,7 +92,7 @@ def map_book_cf_to_catalog_id(cf_to_book_id):
     """Build mapping from CF book indices to catalog indices."""
     cf_to_catalog_id = {}
     for cf, book_id in cf_to_book_id.items():
-        catalog_id = book_id - 1  # book_id starts at 1, catalog indices start at 0
+        catalog_id = int(book_id) - 1  # book_id starts at 1, catalog indices start at 0
         cf_to_catalog_id[cf] = catalog_id
 
     return cf_to_catalog_id

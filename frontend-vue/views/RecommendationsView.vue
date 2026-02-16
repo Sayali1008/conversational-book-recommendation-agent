@@ -1,190 +1,587 @@
 <template>
-    <main class="main-content">
-        <!-- Input Form Panel -->
-        <section class="search-panel">
-            <RecommendationForm :k="k" :userId="userId" :seedBookIds="seedBookIds" :loading="loading"
-                @submit="handleSubmit" @update:k="k = $event" @update:userId="userId = $event"
-                @update:seedBookIds="seedBookIds = $event" />
-        </section>
-
-        <!-- Strategy Display -->
-        <div v-if="strategy" class="strategy-badge">
-            <span class="strategy-label">Strategy:</span>
-            <span class="strategy-value">{{ strategy }}</span>
+    <div class="recommendations-container">
+        <!-- Loading State -->
+        <div v-if="loading" class="empty-state">
+            <div class="spinner"></div>
+            <p>Loading recommendations...</p>
         </div>
 
-        <!-- Recommendations Section -->
-        <section class="recommendations-section">
-            <!-- Empty State -->
-            <div v-if="!recommendations.length && !loading" class="empty-state">
-                <div class="empty-icon">📖</div>
-                <h3>No recommendations yet</h3>
-                <p>Click "Get Recommendations" to get started</p>
-            </div>
+        <!-- No More Recommendations -->
+        <div v-else-if="!currentCard" class="empty-state">
+            <div class="empty-icon">📭</div>
+            <p>No more recommendations</p>
+            <button class="btn-primary" @click="loadRecommendations">
+                🔄 Load More
+            </button>
+        </div>
 
-            <!-- Recommendations Grid -->
-            <div v-else-if="recommendations.length" class="recommendations-grid">
-                <div v-for="(rec, idx) in recommendations" :key="rec.book_id" class="book-card"
-                    :style="{ animationDelay: `${idx * 50}ms` }">
-                    <!-- Book Cover -->
-                    <div class="book-cover">
-                        <button class="cover-button" @click="openBookModal(rec.book_id)" :disabled="loading">
-                            <div class="cover-placeholder">
-                                <span class="cover-icon">📕</span>
-                            </div>
-                        </button>
+        <!-- Book Card -->
+        <div v-else class="card-wrapper">
+            <!-- Left Arrow (Dislike) -->
+            <button class="arrow-btn arrow-left" @click="handleSwipe('dislike')"
+                title="Dislike (Left Arrow or Swipe Left)" :disabled="loading">
+                👎
+            </button>
+
+            <!-- Card -->
+            <div class="book-card" :style="cardStyle" @mousedown="startDrag" @touchstart="startDrag"
+                ref="cardElement">
+                <div class="card-image">
+                    <div class="image-placeholder">📖</div>
+                </div>
+
+                <div class="card-info">
+                    <h2 class="card-title">{{ currentCard.title }}</h2>
+                    <p class="card-authors">{{ formattedAuthors }}</p>
+                    <div class="card-score">
+                        ⭐ {{ (currentCard.score * 100).toFixed(1) }}% Match
                     </div>
+                </div>
 
-                    <!-- Book Info -->
-                    <div class="book-info">
-                        <button class="book-title-button" @click="openBookModal(rec.book_id)" :disabled="loading">
-                            {{ rec.title }}
-                        </button>
-                        <div v-if="rec.authors && rec.authors.length" class="book-authors">
-                            {{ rec.authors.join(', ') }}
-                        </div>
-
-                        <div class="book-meta">
-                            <span class="meta-badge score">⭐ {{ rec.score.toFixed(2) }}</span>
-                            <span class="meta-badge source">{{ rec.source }}</span>
-                            <span class="meta-badge source">ID: {{ rec.book_id }}</span>
-                        </div>
+                <!-- Visual feedback for drag -->
+                <div v-if="isDragging" class="drag-overlay">
+                    <div v-if="dragX < 0" class="swipe-indicator dislike">
+                        👎 DISLIKE
                     </div>
-
-                    <!-- Action Buttons -->
-                    <div class="book-actions">
-                        <button class="action-btn dislike" @click="handleSwipe(rec, 'dislike')" :disabled="loading"
-                            title="I don't like this">
-                            <span>👎</span>
-                        </button>
-                        <button class="action-btn like" @click="handleSwipe(rec, 'like')" :disabled="loading"
-                            title="I like this!">
-                            <span>👍</span>
-                        </button>
+                    <div v-else-if="dragX > 0" class="swipe-indicator like">
+                        👍 LIKE
                     </div>
                 </div>
             </div>
 
-            <!-- Loading State -->
-            <div v-if="loading" class="loading-state">
-                <div v-for="i in k" :key="i" class="loading-skeleton">
-                    <div class="skeleton-cover"></div>
-                    <div class="skeleton-content">
-                        <div class="skeleton-line"></div>
-                        <div class="skeleton-line short"></div>
-                    </div>
-                </div>
-            </div>
-        </section>
+            <!-- Right Arrow (Like) -->
+            <button class="arrow-btn arrow-right" @click="handleSwipe('like')" title="Like (Right Arrow or Swipe Right)"
+                :disabled="loading">
+                👍
+            </button>
+        </div>
 
-        <!-- Book Details Modal -->
-        <BookModal v-if="selectedBook" :book="selectedBook" :loading="loading" @close="closeBookModal"
-            @like="handleModalSwipe('like')" @dislike="handleModalSwipe('dislike')" />
-    </main>
+        <!-- Progress Indicator -->
+        <!-- <div v-if="totalCards > 0" class="progress-section">
+            <div class="progress-text">
+                {{ cardIndex + 1 }} of {{ totalCards }} recommendations
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+            </div>
+        </div> -->
+
+        <!-- Instructions -->
+        <!-- <div class="instructions">
+            <span>👈 Dislike</span>
+            <span>Click card for details</span>
+            <span>Like 👉</span>
+        </div> -->
+    </div>
 </template>
 
 <script>
-import RecommendationForm from '../components/RecommendationForm.vue'
-import RecommendationGrid from '../components/RecommendationGrid.vue'
-import BookModal from '../components/BookModal.vue'
-import { fetchRecommendations, fetchBook, swipe } from '../services/api.js'
+import { fetchRecommendations, swipe } from '../services/api.js'
 
 export default {
-    components: {
-        RecommendationForm,
-        RecommendationGrid,
-        BookModal
-    },
+    emits: ['show-book-details'],
 
     data() {
         return {
-            userId: '',
-            seedBookIds: '',
-            k: 3,
             recommendations: [],
-            strategy: '',
+            cardIndex: 0,
             loading: false,
-            selectedBook: null,
-            selectedBookId: null
+            isDragging: false,
+            dragX: 0,
+            dragY: 0,
+            startX: 0,
+            startY: 0
+        }
+    },
+
+    computed: {
+        currentCard() {
+            return this.recommendations[this.cardIndex] || null
+        },
+
+        totalCards() {
+            return this.recommendations.length
+        },
+
+        progressPercent() {
+            if (this.totalCards === 0) return 0
+            return ((this.cardIndex + 1) / this.totalCards) * 100
+        },
+
+        formattedAuthors() {
+            if (!this.currentCard || !this.currentCard.authors) return ''
+            const authors = typeof this.currentCard.authors === 'string'
+                ? this.currentCard.authors.split(',').map(a => a.trim())
+                : Array.isArray(this.currentCard.authors) ? this.currentCard.authors : []
+            return authors.sort().join(', ')
+        },
+
+        cardStyle() {
+            if (!this.isDragging) {
+                return {
+                    transform: 'translateX(0) rotateZ(0deg)',
+                    opacity: 1
+                }
+            }
+
+            const distance = Math.abs(this.dragX)
+            const maxDistance = 150
+            const rotationFactor = Math.min(distance / maxDistance, 1)
+            const rotation = (this.dragX / Math.abs(this.dragX)) * rotationFactor * 15
+
+            return {
+                transform: `translateX(${this.dragX}px) rotateZ(${rotation}deg)`,
+                opacity: 1 - (distance / 300)
+            }
         }
     },
 
     methods: {
-        async handleSubmit() {
-            if (this.loading) return
+        async loadRecommendations() {
             this.loading = true
-
             try {
-                const params = {
-                    k: String(this.k)
-                }
-                if (this.userId) params.user_id = this.userId
-                if (this.seedBookIds) params.seed_book_ids = this.seedBookIds
-
-                const data = await fetchRecommendations(params)
-                this.recommendations = data.recommendations || []
-                this.strategy = data.strategy || ''
+                const userId = sessionStorage.getItem('userId')
+                const response = await fetchRecommendations({ user_id: userId, k: 10 })
+                this.recommendations = response.recommendations || []
+                this.cardIndex = 0
             } catch (error) {
-                console.error('Error fetching recommendations:', error)
-                alert('Failed to fetch recommendations. Please try again.')
+                console.error('Error loading recommendations:', error)
+                alert('Failed to load recommendations')
             } finally {
                 this.loading = false
             }
         },
 
-        async openBookModal(bookId) {
-            if (this.loading) return
+        async handleSwipe(action) {
+            if (!this.currentCard || this.loading) return
 
-            this.selectedBookId = bookId
-            this.selectedBook = null
-
-            try {
-                const data = await fetchBook(bookId)
-                this.selectedBook = data
-            } catch (error) {
-                console.error('Error fetching book details:', error)
-                alert('Failed to load book details')
-                this.selectedBookId = null
-            }
-        },
-
-        closeBookModal() {
-            this.selectedBook = null
-            this.selectedBookId = null
-        },
-
-        async handleSwipe(rec, action) {
-            if (this.loading) return
             this.loading = true
-
             try {
-                const payload = {
-                    user_id: this.userId || 'anonymous',
-                    book_id: rec.book_id,
-                    action,
-                    k: this.k
-                }
+                const userId = sessionStorage.getItem('userId')
+                const response = await swipe({
+                    user_id: userId,
+                    book_id: this.currentCard.book_id,
+                    action: action,
+                    k: 10
+                })
 
-                const data = await swipe(payload)
-                if (data.next_recommendations && data.next_recommendations.length > 0) {
-                    this.recommendations = data.next_recommendations
+                // Reset drag state
+                this.dragX = 0
+                this.dragY = 0
+                this.isDragging = false
+
+                // Move to next card
+                if (this.cardIndex < this.recommendations.length - 1) {
+                    this.cardIndex++
+                } else if (response.next_recommendations && response.next_recommendations.length > 0) {
+                    // Load next batch if available
+                    this.recommendations = response.next_recommendations
+                    this.cardIndex = 0
+                } else {
+                    // No more cards
+                    this.cardIndex = this.recommendations.length
                 }
             } catch (error) {
-                console.error('Error on swipe:', error)
-                alert('Failed to process your action. Please try again.')
+                console.error(`Error swiping ${action}:`, error)
+                alert(`Failed to record ${action}. Please try again.`)
             } finally {
                 this.loading = false
             }
         },
 
-        async handleModalSwipe(action) {
-            if (!this.selectedBook) return
-            this.closeBookModal()
-            const rec = this.recommendations.find(r => r.book_id === this.selectedBookId)
-            if (rec) {
-                await this.handleSwipe(rec, action)
+        showDetails() {
+            if (this.currentCard) {
+                this.$emit('show-book-details', this.currentCard)
+            }
+        },
+
+        startDrag(event) {
+            if (this.loading) return
+            this.isDragging = true
+            this.startX = event.type.includes('mouse') ? event.clientX : event.touches[0].clientX
+            this.startY = event.type.includes('mouse') ? event.clientY : event.touches[0].clientY
+
+            const moveHandler = event.type.includes('mouse')
+                ? this.handleMouseMove.bind(this)
+                : this.handleTouchMove.bind(this)
+            const endHandler = event.type.includes('mouse')
+                ? this.handleMouseUp.bind(this)
+                : this.handleTouchEnd.bind(this)
+
+            const moveEvent = event.type.includes('mouse') ? 'mousemove' : 'touchmove'
+            const endEvent = event.type.includes('mouse') ? 'mouseup' : 'touchend'
+
+            document.addEventListener(moveEvent, moveHandler)
+            document.addEventListener(endEvent, endHandler)
+
+            // Store handlers for cleanup
+            this._moveHandler = moveHandler
+            this._endHandler = endHandler
+            this._moveEvent = moveEvent
+            this._endEvent = endEvent
+        },
+
+        handleMouseMove(event) {
+            if (!this.isDragging) return
+            this.dragX = event.clientX - this.startX
+            this.dragY = event.clientY - this.startY
+        },
+
+        handleTouchMove(event) {
+            if (!this.isDragging) return
+            this.dragX = event.touches[0].clientX - this.startX
+            this.dragY = event.touches[0].clientY - this.startY
+        },
+
+        handleMouseUp() {
+            this.finalizeDrag()
+            document.removeEventListener(this._moveEvent, this._moveHandler)
+            document.removeEventListener(this._endEvent, this._endHandler)
+        },
+
+        handleTouchEnd() {
+            this.finalizeDrag()
+            document.removeEventListener(this._moveEvent, this._moveHandler)
+            document.removeEventListener(this._endEvent, this._endHandler)
+        },
+
+        finalizeDrag() {
+            this.isDragging = false
+            const threshold = 80
+
+            if (Math.abs(this.dragX) > threshold) {
+                if (this.dragX > 0) {
+                    this.handleSwipe('like')
+                } else {
+                    this.handleSwipe('dislike')
+                }
+            } else if (Math.abs(this.dragX) < 10 && Math.abs(this.dragY) < 10) {
+                // No significant movement - treat as click
+                this.showDetails()
+                this.dragX = 0
+                this.dragY = 0
+            } else {
+                // Reset position if swipe didn't meet threshold
+                this.dragX = 0
+                this.dragY = 0
             }
         }
+    },
+
+    mounted() {
+        this.loadRecommendations()
     }
 }
 </script>
+
+<style scoped>
+.recommendations-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 30px;
+    padding: 40px 20px;
+}
+
+/* ===== EMPTY STATE ===== */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 60px 20px;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid var(--border-color);
+    border-top: 4px solid var(--primary-purple);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.empty-icon {
+    font-size: 60px;
+}
+
+.empty-state p {
+    font-size: 18px;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.btn-primary {
+    background-color: var(--primary-purple);
+    color: white;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-purple-dark);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+/* ===== CARD WRAPPER ===== */
+.card-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    width: 100%;
+    max-width: 900px;
+    height: 500px;
+}
+
+/* ===== ARROW BUTTONS ===== */
+.arrow-btn {
+    width: 60px;
+    height: 100%;
+    background-color: rgba(216, 191, 216, 0.3);
+    border: none;
+    border-radius: 12px;
+    font-size: 32px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.arrow-btn:hover:not(:disabled) {
+    background-color: rgba(216, 191, 216, 0.5);
+    transform: scale(1.05);
+}
+
+.arrow-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.arrow-left {
+    background-color: rgba(243, 154, 200, 0.2);
+}
+
+.arrow-left:hover:not(:disabled) {
+    background-color: rgba(243, 154, 200, 0.4);
+}
+
+.arrow-right {
+    background-color: rgba(216, 191, 216, 0.2);
+}
+
+.arrow-right:hover:not(:disabled) {
+    background-color: rgba(216, 191, 216, 0.4);
+}
+
+/* ===== BOOK CARD ===== */
+.book-card {
+    flex: 1;
+    height: 100%;
+    background: linear-gradient(135deg, var(--primary-purple-light), var(--primary-pink-light));
+    border-radius: 12px;
+    padding: 30px;
+    display: flex;
+    gap: 30px;
+    cursor: pointer;
+    transition: transform 0.1s ease, opacity 0.1s ease;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    user-select: none;
+}
+
+.card-image {
+    flex-shrink: 0;
+}
+
+.image-placeholder {
+    width: 140px;
+    height: 200px;
+    background-color: rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 64px;
+    color: white;
+}
+
+.card-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.card-title {
+    font-size: 28px;
+    font-weight: 700;
+    color: white;
+    margin: 0 0 12px 0;
+    line-height: 1.3;
+}
+
+.card-authors {
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.9);
+    margin: 0 0 24px 0;
+}
+
+.card-score {
+    font-size: 18px;
+    font-weight: 600;
+    color: white;
+}
+
+/* ===== DRAG OVERLAY ===== */
+.drag-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+}
+
+.swipe-indicator {
+    font-size: 36px;
+    font-weight: 700;
+    color: white;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.swipe-indicator.like {
+    color: #8FD3A8;
+}
+
+.swipe-indicator.dislike {
+    color: #F8A8A8;
+}
+
+/* ===== PROGRESS ===== */
+.progress-section {
+    width: 100%;
+    max-width: 500px;
+}
+
+.progress-text {
+    text-align: center;
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background-color: var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: var(--primary-purple);
+    transition: width 0.3s ease;
+}
+
+/* ===== INSTRUCTIONS ===== */
+.instructions {
+    display: flex;
+    justify-content: space-around;
+    width: 100%;
+    max-width: 500px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-top: 20px;
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 768px) {
+    .card-wrapper {
+        height: 400px;
+        gap: 12px;
+    }
+
+    .arrow-btn {
+        width: 50px;
+        font-size: 24px;
+    }
+
+    .book-card {
+        flex-direction: column;
+        padding: 20px;
+    }
+
+    .card-image {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+    }
+
+    .image-placeholder {
+        width: 100px;
+        height: 150px;
+        font-size: 48px;
+    }
+
+    .card-title {
+        font-size: 22px;
+    }
+
+    .card-authors {
+        font-size: 14px;
+    }
+}
+
+@media (max-width: 480px) {
+    .recommendations-container {
+        padding: 20px;
+        gap: 20px;
+    }
+
+    .card-wrapper {
+        flex-direction: column;
+        height: auto;
+        gap: 12px;
+    }
+
+    .arrow-btn {
+        width: 100%;
+        height: 50px;
+        font-size: 24px;
+    }
+
+    .arrow-left,
+    .arrow-right {
+        flex-direction: row;
+    }
+
+    .book-card {
+        gap: 20px;
+    }
+}
+</style>

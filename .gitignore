@@ -213,7 +213,6 @@ __marimo__/
 archive/
 data*/
 logs/
-app_logs/
 node_modules/
 
 # Custom files

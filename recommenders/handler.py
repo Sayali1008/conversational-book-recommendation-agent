@@ -1,147 +1,104 @@
-"""
-Recommendation orchestrator that coordinates collaborative and content-based recommendations.
-Implements Option 2 strategy: warm users get hybrid, cold items as fallback; cold users get content-based.
-"""
-
-from typing import Optional, Tuple
+import logging
+import time
 
 import numpy as np
 
-from common.constants import PATHS
+from common.constants import EVALUATION, PATHS
+from common.helpers import *
 from common.utils import setup_logging
 
-from .collaborative import _create_user_profile_from_history, get_collaborative_recommendations
-from .content_based import _get_cold_catalog_indices, get_content_based_recommendations
+from .collaborative import create_user_profile_from_history, get_collaborative_scorer
+from .content_based import get_content_based_scorer
 
-logger = setup_logging(__name__, PATHS["app_log_file"])
+logger = setup_logging(__name__, PATHS["app_log_file"], logging.DEBUG)
 
 
-def recommend_books(context, config, user_cf, is_warm_user, k=10, seed_book_ids=None, swiped_books=None):
-    """
-    Generate recommendations.
-    - Warm users: Get hybrid (CF + content) recommendations, use cold as fallback
-    - Cold users: Get content-based recommendations only
-    """
+def get_recommendations(
+    context,
+    user_cf,
+    candidate_pool_size,
+    lambda_weight,
+    is_warm_user=True,
+    top_k=10,
+    swiped_books=None,
+    user_profile=None,
+):
+    exclusions = _build_exclusions(context, user_cf, swiped_books)
 
-    logger.info(f"is_warm_user={is_warm_user}, user_cf={user_cf}, k={k}")
-
-    # ===================================================================
-    # WARM USER: Get hybrid recommendations with cold fallback
-    # ===================================================================
-    if is_warm_user:
-        logger.info(f"Going on a warm user path")
-
-        # Get warm (hybrid) recommendations
-        warm_indices, warm_scores, warm_sources = get_collaborative_recommendations(
-            context=context,
-            config=config,
-            user_cf=user_cf,
-            k=k,
-            seed_book_ids=seed_book_ids,
-            swiped_books=swiped_books,
+    if not is_warm_user:
+        cold_indices, cold_scores = get_content_based_scorer(
+            context=context, exclude_catalog_rows=exclusions, user_profile=user_profile
         )
-        logger.info(f"Warm recommender returned {len(warm_indices)} items")
-        if len(warm_indices) > 0:
-            logger.info(f"  → warm_scores: {warm_scores[:min(3, len(warm_scores))]}")
+        return cold_indices[:top_k], cold_scores[:top_k]
 
-        # Build catalog-level exclusion set
-        exclude_rows = set()
-        if swiped_books:
-            swiped_book_ids = [row["book_id"] for row in swiped_books]
-            mapping = context["index_mappings"]["book_id_to_catalog_id"]
-            for b in swiped_book_ids:
-                cat = mapping.get(b)
-                if cat is not None:
-                    exclude_rows.add(cat)
+    mappings = context["index_mappings"]
+    liked_catalog_ids = (
+        {mappings["book_id_to_catalog_id"][b["book_id"]] for b in swiped_books if b["action"] == "like"}
+        if swiped_books
+        else set()
+    )
+    disliked_catalog_ids = (
+        {mappings["book_id_to_catalog_id"][b["book_id"]] for b in swiped_books if b["action"] == "dislike"}
+        if swiped_books
+        else set()
+    )
 
-        # Add rated items to exclusions
-        if config["filter_rated"]:
-            user_row = context["train_matrix"][user_cf].toarray().flatten()
-            rated_cf_indices = np.where(user_row > 0)[0]
-            rated_catalog_indices = {
-                context["index_mappings"]["book_cf_to_catalog_id"][cf_idx] for cf_idx in rated_cf_indices
-            }
-            exclude_rows.update(rated_catalog_indices)
+    # Get all CF scores as {catalog_id: raw_cf_score} dictionary
+    cf_score_map = get_collaborative_scorer(context, user_cf, candidate_pool_size)
 
-        # Filter warm outputs against exclusions
-        if len(warm_indices) > 0:
-            keep_mask = np.array([idx not in exclude_rows for idx in warm_indices])
-            warm_indices = warm_indices[keep_mask]
-            warm_scores = warm_scores[keep_mask]
-            warm_sources = warm_sources[keep_mask]
+    # Early return if no candidates found in CF scoring
+    if not cf_score_map or len(cf_score_map) == 0:
+        return np.array([], dtype=int), np.array([], dtype=float)
 
-        logger.info(f"Excluding {len(exclude_rows)} items (rated + swipes)")
+    user_profile = create_user_profile_from_history(context, user_cf, liked_catalog_ids, disliked_catalog_ids)
 
-        # Check if we have enough warm recommendations
-        if len(warm_indices) >= k:
-            logger.info(f"Warm items ({len(warm_indices)}) >= k ({k}), returning ONLY warm")
-            final_indices, final_scores, final_sources = warm_indices[:k], warm_scores[:k], warm_sources[:k]
-        else:
-            # Need fallback cold items
-            n_needed = k - len(warm_indices)
-            logger.info(f"Warm items ({len(warm_indices)}) < k ({k}), need {n_needed} cold items")
+    # Get the candidate pool from the top CF scores
+    candidate_catalog_rows = np.array(list(cf_score_map.keys()))
 
-            # Get cold catalog indices upfront (used by content-based recommender)
-            unrated_catalog_rows = _get_cold_catalog_indices(context)
-            logger.info(f"Cold catalog items: {len(unrated_catalog_rows)}")
+    # Get all CB scores for the candidates
+    cb_items, cb_scores_norm = get_content_based_scorer(context, exclusions, candidate_catalog_rows, user_profile)
 
-            cold_indices, cold_scores, cold_sources = get_content_based_recommendations(
-                context=context,
-                config=config,
-                k=n_needed,
-                exclude_catalog_rows=exclude_rows,
-                candidate_catalog_rows=unrated_catalog_rows,
-            )
+    # Blend and Rank: Align the raw CF scores to the items returned by the CB function
+    aligned_cf_scores = np.array([cf_score_map[idx] for idx in cb_items])
 
-            logger.info(f"Cold recommender returned {len(cold_indices)} fallback items")
-            if len(cold_indices) > 0:
-                logger.info(f"  → cold_scores: {cold_scores[:min(3, len(cold_scores))]}")
+    # Normalize the CF scores now that we have a consistent list of items
+    cf_scores_norm = normalize_scores(aligned_cf_scores, EVALUATION["norm"], EVALUATION["norm_metadata"])
 
-            # Concatenate warm + cold
-            final_indices = np.concatenate([warm_indices, cold_indices])
-            final_scores = np.concatenate([warm_scores, cold_scores])
-            final_sources = np.concatenate([warm_sources, cold_sources])
+    # Calculate final hybrid score
+    hybrid_scores = (lambda_weight * cf_scores_norm) + ((1 - lambda_weight) * cb_scores_norm)
 
-    # ===================================================================
-    # COLD USER: Get content-based recommendations only
-    # ===================================================================
-    else:
-        logger.info(f"Going on a cold user path")
+    # Final Sort
+    top_k_indices = np.argsort(hybrid_scores)[::-1][:top_k]
 
-        exclude_rows = set()
-        if swiped_books:
-            swiped_book_ids = [row["book_id"] for row in swiped_books]
-            mapping = context["index_mappings"]["book_id_to_catalog_id"]
-            for b in swiped_book_ids:
-                cat = mapping.get(b)
-                if cat is not None:
-                    exclude_rows.add(cat)
-
-        final_indices, final_scores, final_sources = get_content_based_recommendations(
-            context=context,
-            config=config,
-            k=k,
-            exclude_catalog_rows=exclude_rows,
-        )
-
-        logger.info(f"Cold recommender returned {len(final_indices)} items")
-        if len(final_indices) > 0:
-            logger.info(f"  → scores: {final_scores[:min(3, len(final_scores))]}")
-
-    # ===================================================================
-    # Return results
-    # ===================================================================
-    if len(final_indices) == 0:
+    if len(top_k_indices) == 0:
         logger.info(f"No recommendations available")
-        return np.array([], dtype=int), np.array([], dtype=float), np.array([], dtype=object)
+        return np.array([], dtype=int), np.array([], dtype=float)
 
-    # Trim to k
-    final_indices = final_indices[:k]
-    final_scores = final_scores[:k]
-    final_sources = final_sources[:k]
+    return (cb_items[top_k_indices], hybrid_scores[top_k_indices])
 
-    logger.info(f"Final results: {len(final_indices)} items")
-    logger.info(f"Sources: {list(final_sources)}")
-    logger.info(f"Scores: {final_scores[:min(3, len(final_scores))]}")
 
-    return final_indices, final_scores, final_sources
+# region HELPERS
+def _build_exclusions(context, user_cf, swiped_books=None):
+    """Combines training data and swiped books into a single set of catalog IDs to exclude."""
+    mappings = context["index_mappings"]
+    exclude_set = set()
+
+    # 1. Add items from the training matrix (Historical interactions)
+    if user_cf is not None:
+        user_train_row = context["train_matrix"][user_cf]
+        for cf_idx in user_train_row.indices:
+            catalog_idx = mappings["book_cf_to_catalog_id"].get(cf_idx)
+            if catalog_idx is not None:
+                exclude_set.add(catalog_idx)
+
+    # 2. Add items from the current session (Swiped books)
+    if swiped_books:
+        for book in swiped_books:
+            catalog_idx = mappings["book_id_to_catalog_id"].get(book["book_id"])
+            if catalog_idx is not None:
+                exclude_set.add(catalog_idx)
+
+    return exclude_set
+
+
+# endregion

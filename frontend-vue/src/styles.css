@@ -1,29 +1,37 @@
 :root {
-    /* Pastel Color Palette */
-    --primary-color: #A7C7E7;
-    --primary-dark: #89A8C8;
-    --primary-light: #CFE2F3;
-    --secondary-color: #F7B2BD;
-    --success-color: #8FD3A8;
-    --error-color: #F28B82;
-    --warning-color: #FBD38D;
+    /* Pastel Color Palette - Purple & Pink */
+    --primary-purple: #D8BFD8;      /* Light pastel purple */
+    --primary-purple-dark: #C8A8C8; /* Darker pastel purple */
+    --primary-purple-light: #E8D5E8; /* Lighter pastel purple */
+    --primary-pink: #FFB6C1;         /* Light pastel pink */
+    --primary-pink-dark: #F39AC8;    /* Darker pastel pink */
+    --primary-pink-light: #FFD1DC;   /* Lighter pastel pink */
+    
+    /* Accents */
+    --success-color: #A8D5BA;
+    --error-color: #F8A8A8;
+    --warning-color: #FFD9A8;
 
     /* Background Colors */
     --bg-primary: #FFFFFF;
-    --bg-secondary: #F8FAFF;
-    --bg-tertiary: #EEF2FF;
+    --bg-secondary: #F5F2F7;         /* Very light purple tint */
+    --bg-tertiary: #EFE3F5;          /* Light purple tint */
 
     /* Text Colors */
-    --text-primary: #1F2937;
-    --text-secondary: #475569;
-    --text-tertiary: #6B7280;
-    --border-color: #E5E7EB;
+    --text-primary: #2D1B3D;         /* Dark purple-ish */
+    --text-secondary: #5A4A6A;       /* Medium purple-ish */
+    --text-tertiary: #8B7A9B;        /* Light purple-ish */
+    --border-color: #E5D5E5;         /* Light purple border */
+
+    /* Login/Reg specific (pink tones) */
+    --login-bg: #FFF0F5;             /* Very light pink */
+    --login-border: #FFD1DC;         /* Light pink */
 
     /* Shadows */
-    --shadow-sm: 0 1px 2px 0 rgba(31, 41, 55, 0.06);
-    --shadow-md: 0 4px 6px -1px rgba(31, 41, 55, 0.1);
-    --shadow-lg: 0 10px 15px -3px rgba(31, 41, 55, 0.12);
-    --shadow-xl: 0 20px 25px -5px rgba(31, 41, 55, 0.14);
+    --shadow-sm: 0 1px 2px 0 rgba(45, 27, 61, 0.06);
+    --shadow-md: 0 4px 6px -1px rgba(45, 27, 61, 0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(45, 27, 61, 0.12);
+    --shadow-xl: 0 20px 25px -5px rgba(45, 27, 61, 0.14);
 }
 
 * {
@@ -369,6 +377,10 @@
     overflow: hidden;
     box-shadow: var(--shadow-md);
     animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    display: flex;
+    width: 100%;
+    align-items: center;
+    flex-direction: column;
 }
 
 .skeleton-cover {
@@ -414,10 +426,13 @@
 
 .app-container {
     min-height: 100vh;
+    width: 100%;
     display: flex;
     flex-direction: column;
     background: linear-gradient(180deg, var(--bg-secondary) 0%, #FFFFFF 60%);
     color: var(--text-primary);
+    position: relative;
+    z-index: 1;
 }
 
 /* Header */
@@ -431,6 +446,13 @@
 .header-content {
     max-width: 1200px;
     margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header-title {
+    flex: 1;
 }
 
 .header-title h1 {
@@ -438,6 +460,133 @@
     font-weight: 700;
     margin-bottom: 0.5rem;
     letter-spacing: -0.5px;
+}
+
+.header-user {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    text-align: right;
+}
+
+.header-buttons {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.add-book-btn {
+    padding: 0.5rem 1rem;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.add-book-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.user-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+}
+
+.profile-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    color: #374151;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.profile-icon:hover {
+    background: rgba(255, 255, 255, 0.5);
+    border-color: rgba(255, 255, 255, 0.8);
+    transform: scale(1.05);
+}
+
+.profile-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    min-width: 220px;
+    overflow: hidden;
+}
+
+.profile-menu-item {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.user-info {
+    background: var(--bg-secondary);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 16px;
+}
+
+.user-info-name {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 15px;
+}
+
+.user-info-id {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    word-break: break-all;
+}
+
+.profile-menu-divider {
+    height: 1px;
+    background: var(--border-color);
+}
+
+.logout-btn {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--error-color);
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.3s ease;
+    padding: 12px 16px;
+}
+
+.logout-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.logout-icon {
+    font-size: 16px;
 }
 
 .subtitle {
@@ -449,14 +598,16 @@
 /* Main Content */
 .main-content {
     flex: 1;
-    max-width: 1200px;
     margin: 0 auto;
     width: 100%;
-    padding: 2rem 1rem;
+    padding: 2rem;
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
 }
 
 .empty-state {
-    max-width: 1200px;
     margin: 2rem auto;
     padding: 0 1rem;
 }
@@ -499,6 +650,7 @@
     margin-bottom: 2rem;
     box-shadow: var(--shadow-md);
     border: 1px solid var(--border-color);
+    width: 60%;
 }
 
 .search-panel-content {
@@ -587,6 +739,10 @@
 /* Recommendations Section */
 .recommendations-section {
     min-height: 400px;
+    display: flex;
+    width: 100%;
+    align-items: center;
+    flex-direction: column;
 }
 
 .empty-state {
@@ -618,6 +774,7 @@
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 1rem;
     align-items: start;
+    width: 75%;
 }
 
 /* Book Card */
@@ -1012,6 +1169,11 @@
 .pipeline-container {
     width: 100%;
     max-width: 600px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
 }
 
 .empty-card {

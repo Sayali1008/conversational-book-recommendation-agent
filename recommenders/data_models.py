@@ -57,4 +57,3 @@ class RecommendationConfig(TypedDict):
     k_values: List[int]  # K values to evaluate [5, 10, ...]
     lambda_values: List[float]  # Lambda values to evaluate [0.0, 0.5, 1.0, ...]
     min_validation_items: int  # Minimum validation items required
-    min_confidence: int  # Minimum confidence threshold

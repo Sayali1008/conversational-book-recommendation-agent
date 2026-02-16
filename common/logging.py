@@ -188,6 +188,36 @@ def log_evaluation_summary(logger, results):
             logger.info(f"{strategy_name:<20} {val_ndcg:>12.4f} {test_ndcg:>12.4f} {delta:>12.4f} {status}")
 
 
+def log_timing_summary(logger, stats_dict, cps, lambda_w, num_users):
+    """Log timing breakdown for debugging bottlenecks."""
+    if not any(stats_dict.values()):
+        return
+
+    logger.info(f"[Timing Breakdown] CPS={cps}, Lambda={lambda_w}, Users={num_users}")
+
+    def safe_mean(times):
+        return np.mean(times) if times else 0
+
+    def safe_total(times):
+        return np.sum(times) if times else 0
+
+    excl_times = stats_dict["exclusions"]
+    cf_times = stats_dict["cf_scorer"]
+    cb_times = stats_dict["cb_scorer"]
+
+    if excl_times:
+        logger.info(
+            f"  _build_exclusions:     {safe_mean(excl_times)*1000:.3f}ms/user (total: {safe_total(excl_times):.2f}s)"
+        )
+    if cf_times:
+        logger.info(f"  get_cf_scorer:        {safe_mean(cf_times)*1000:.3f}ms/user (total: {safe_total(cf_times):.2f}s)")
+    if cb_times:
+        logger.info(f"  get_cb_scorer:        {safe_mean(cb_times)*1000:.3f}ms/user (total: {safe_total(cb_times):.2f}s)")
+
+    total_profiled = safe_total(excl_times) + safe_total(cf_times) + safe_total(cb_times)
+    if total_profiled > 0:
+        logger.info(f"  Total profiled time:  {total_profiled:.2f}s")
+
 def log_hyperparameters(logger):
     logger.info("=" * 80)
     logger.info("EVALUATION HYPERPARAMETERS")
@@ -223,7 +253,6 @@ def log_hyperparameters(logger):
     logger.info(f"  Recommender type: {EVALUATION['type']}")
     logger.info("Evaluation filters:")
     logger.info(f"  Min validation items per user: {EVALUATION['min_validation_items']}")
-    logger.info(f"  Min confidence threshold: {EVALUATION['min_confidence']}")
 
 
 def _get_strategy_name(lambda_weight):

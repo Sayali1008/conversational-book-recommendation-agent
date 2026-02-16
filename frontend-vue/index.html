@@ -11,16 +11,24 @@
 
     <style>
       /* Global base styles */
-      html, body { height: 100%; }
-      body {
+      html, body { 
+        height: 100%;
+        width: 100%;
         margin: 0;
+        padding: 0;
+      }
+      body {
         font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-        background-color: #F8FAFF; /* pastel base */
-        color: #1F2937; /* dark slate for readability */
+        background-color: #F8FAFF;
+        color: #1F2937;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
       }
-      #app { min-height: 100%; }
+      #app { 
+        min-height: 100vh;
+        width: 100%;
+        display: block;
+      }
     </style>
   </head>
   <body>

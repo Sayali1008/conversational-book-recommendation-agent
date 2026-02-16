@@ -1,7 +1,10 @@
 import ast
 import html
+import os
 import re
 
+import faiss
+import numpy as np
 import pandas as pd
 
 from common.constants import DATA_PREPROCESSING, PATHS
@@ -11,11 +14,7 @@ logger = setup_logging(__name__, PATHS["eval_log_file"])
 
 
 def clean_books_data(books_df) -> pd.DataFrame:
-    """
-    Clean and normalize the books DataFrame including authors, genres, titles, and descriptions.
-    Args: books_df (pd.DataFrame): Raw books DataFrame.
-    Returns: pd.DataFrame: Cleaned catalog of usable books.
-    """
+    """Clean and normalize the books DataFrame including authors, genres, titles, and descriptions."""
     books_df["authors"] = _normalize_author_column(books_df["authors"])
     books_df["genres"] = _reduce_to_top_genres(_normalize_genre_column(books_df["categories"]))
     books_df["title"] = _normalize_text_field(books_df["title"])
@@ -37,8 +36,8 @@ def clean_books_data(books_df) -> pd.DataFrame:
 def clean_ratings_data(ratings_df, cleaned_books_df) -> pd.DataFrame:
     """Clean ratings DataFrame, normalize titles, convert timestamps, deduplicate, transform scores to confidence, and filter by user/item thresholds."""
 
-    # Drop user-related columns except user_id
-    ratings_df = ratings_df.drop(columns=["profilename"])
+    # Keep profilename for user migration, drop other user-related columns
+    # ratings_df = ratings_df.drop(columns=["profilename"])
 
     # Drop rows with missing title, user_id, review/score
     ratings_df = ratings_df[ratings_df["title"].notna()]
@@ -56,12 +55,12 @@ def clean_ratings_data(ratings_df, cleaned_books_df) -> pd.DataFrame:
     # Deduplicate (user, book) pairs, group by (user_id, title) and keep one with most recent review/time
     ratings_df = ratings_df.sort_values("review/time").drop_duplicates(subset=["user_id", "title"], keep="last")
 
-    # Transform 1-5 ratings into confidence weights: scores ≤3 become 0, 4 becomes 1, and 5 becomes 2
+    # Transform ratings to binary: keep only ratings >= 4 as positive interactions
     ratings_df["review/score"] = pd.to_numeric(ratings_df["review/score"], errors="coerce")
-    ratings_df["confidence"] = ratings_df["review/score"].clip(lower=3) - 3
+    ratings_df["confidence"] = (ratings_df["review/score"] >= 4).astype(int)
 
-    # Filter out interactions with zero confidence (ratings ≤ 3)
-    logger.info(f"Ratings data size before filtering confidence=0: {len(ratings_df):,}")
+    # Filter out zero-confidence interactions (ratings < 4)
+    logger.info(f"Ratings data size before filtering binary: {len(ratings_df):,}")
     len_confidence_0 = len(ratings_df[ratings_df["confidence"] == 0])
     ratings_df = ratings_df[ratings_df["confidence"] > 0].copy()
 
@@ -70,6 +69,31 @@ def clean_ratings_data(ratings_df, cleaned_books_df) -> pd.DataFrame:
     return ratings_df
 
 
+def generate_embeddings(df, model, batch_size=64):
+    if os.path.exists(PATHS["catalog_books_index"]) and os.path.exists(PATHS["catalog_books_embeddings"]):
+        embeddings = np.load(PATHS["catalog_books_embeddings"])
+        index = faiss.read_index(PATHS["catalog_books_index"])
+        return embeddings, index
+
+    # Convert each dataframe row into a single text input for the model
+    texts = df.apply(_prepare_text, axis=1).tolist()
+    embeddings = model.encode(texts, batch_size=batch_size, show_progress_bar=True)
+    embeddings = np.asarray(embeddings)
+
+    np.save(PATHS["catalog_books_embeddings"], embeddings)
+
+    # Normalize embeddings for cosine similarity
+    faiss.normalize_L2(embeddings)
+    n, dim = embeddings.shape
+    index = faiss.IndexFlatIP(dim)
+    index.add(embeddings)
+
+    # Write to index
+    faiss.write_index(index, PATHS["catalog_books_index"])
+    return embeddings, index
+
+
+# region HELPERS
 def _normalize_author_column(author_col):
     """
     Normalize and clean a DataFrame column containing author names.
@@ -138,7 +162,7 @@ def _normalize_text_field(cleaned_col):
     return cleaned_col
 
 
-def _canonicalize_title_for_dedupe(title: str) -> str:
+def _canonicalize_title_for_dedupe(title):
     """
     Create a canonical title key for duplicate detection.
     This is more aggressive than display normalization.
@@ -155,7 +179,7 @@ def _canonicalize_title_for_dedupe(title: str) -> str:
     return title
 
 
-def _parse_duplicate_records(df: pd.DataFrame) -> pd.DataFrame:
+def _parse_duplicate_records(df):
     """
     Deduplicate books using canonical (title_key, authors_key).
     Keeps the most information-rich record per group.
@@ -261,3 +285,17 @@ def _keep_usable_books(df):
     )
 
     return df[mask].copy(), mask.mean()
+
+
+def _prepare_text(row):
+    title = row["title"]
+    genres = (
+        ", ".join(ast.literal_eval(row["genres"]) if isinstance(row["genres"], str) else row["genres"])
+        if row["genres"]
+        else ""
+    )
+    desc = row["description"]
+    return f"Title: {title} | Genre: {genres} | Description: {desc}"
+
+
+# endregion
