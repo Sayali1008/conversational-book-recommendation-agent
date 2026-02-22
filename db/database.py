@@ -1,7 +1,9 @@
 import sqlite3
 from pathlib import Path
 
-from common.constants import PATHS
+import numpy as np
+
+from common.constants import DATABASE_DIR, PATHS
 from common.utils import setup_logging
 
 logger = setup_logging(__name__, PATHS["app_log_file"])
@@ -76,6 +78,19 @@ class Database:
                     description TEXT,
                     infolink TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            )
+
+            # Book embeddings table
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS book_embeddings (
+                    book_id INTEGER PRIMARY KEY,
+                    embedding BLOB NOT NULL,
+                    dim INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (book_id) REFERENCES books(book_id)
                 )
             """
             )
@@ -179,22 +194,19 @@ class Database:
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            
+
             # Check if last_training_date exists
             cursor.execute("SELECT value FROM metadata WHERE key = ?", ("last_training_date",))
             result = cursor.fetchone()
-            
+
             if result is None:
                 # Insert initial training date
-                cursor.execute(
-                    "INSERT INTO metadata (key, value) VALUES (?, ?)",
-                    ("last_training_date", "2026-01-31")
-                )
+                cursor.execute("INSERT INTO metadata (key, value) VALUES (?, ?)", ("last_training_date", "2025-02-21"))
                 conn.commit()
-                logger.info("✓ Metadata initialized with last_training_date=2026-01-31")
+                logger.info("✓ Metadata initialized with last_training_date=2025-02-21")
             else:
                 logger.info(f"Metadata already initialized: last_training_date={result[0]}")
-        
+
         except Exception as e:
             conn.rollback()
             logger.error(f"Error initializing metadata: {e}")
@@ -241,3 +253,102 @@ class Database:
     def close_all(self):
         """Close database connections (useful for cleanup)."""
         pass
+
+    def check_db_has_data(self):
+        """Check if the database tables already have data to determine if we need to run the data pipeline."""
+        db_path = DATABASE_DIR / "system.db"
+        if not db_path.exists():
+            return False
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM books")
+            books_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM book_embeddings")
+            book_embeddings_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM users")
+            users_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM ratings")
+            ratings_count = cursor.fetchone()[0]
+
+            return books_count > 0 and book_embeddings_count > 0 and users_count > 0 and ratings_count > 0
+        except Exception as e:
+            # If there's an error (e.g., tables don't exist), assume no data
+            return False
+        finally:
+            conn.close()
+
+    def generate_single_book_embedding(self, title: str, genres: list, description: str, model) -> np.ndarray:
+        """Generate embedding for a single book."""
+        genres_str = ", ".join(genres) if isinstance(genres, list) else str(genres)
+        text = f"Title: {title} | Genre: {genres_str} | Description: {description}"
+        embedding = model.encode(text, show_progress_bar=False)
+        return np.array(embedding)
+
+    def save_embedding_to_db(self, book_id: int, embedding: np.ndarray) -> None:
+        """Save book embedding to database as BLOB."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            embedding_blob = embedding.tobytes()
+            embedding_dim = embedding.shape[0]
+
+            cursor.execute(
+                "INSERT OR REPLACE INTO book_embeddings (book_id, embedding, dim, created_at) VALUES (?, ?, ?, ?)",
+                (book_id, embedding_blob, embedding_dim, __import__("datetime").datetime.now().isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def load_embedding_from_db(self, book_id: int):
+        """Load book embedding from database."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT embedding, dim FROM book_embeddings WHERE book_id = ?", (book_id,))
+            result = cursor.fetchone()
+
+            if result:
+                embedding_blob, dim = result
+                return np.frombuffer(embedding_blob, dtype=np.float32).reshape(dim)
+            return None
+        finally:
+            conn.close()
+
+    def load_all_embeddings_from_db(self, catalog_df) -> np.ndarray:
+        """Load all embeddings from database, ordered by catalog book_id."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT book_id, embedding, dim FROM book_embeddings ORDER BY book_id")
+            results = cursor.fetchall()
+
+            if not results:
+                return None
+
+            # Build embedding matrix in catalog order
+            embeddings_dict = {}
+            first_dim = None
+
+            for book_id, embedding_blob, dim in results:
+                if first_dim is None:
+                    first_dim = dim
+                embeddings_dict[int(book_id)] = np.frombuffer(embedding_blob, dtype=np.float32).reshape(dim)
+
+            # Stack embeddings in catalog order (book_id 1-indexed)
+            embeddings_list = []
+            for _, row in catalog_df.iterrows():
+                book_id = int(row["book_id"])
+                if book_id in embeddings_dict:
+                    embeddings_list.append(embeddings_dict[book_id])
+                else:
+                    # Fallback: zero vector if embedding not found
+                    embeddings_list.append(np.zeros(first_dim, dtype=np.float32))
+
+            return np.array(embeddings_list, dtype=np.float32)
+        finally:
+            conn.close()

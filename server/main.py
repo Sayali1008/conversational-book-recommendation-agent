@@ -6,20 +6,18 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sentence_transformers import SentenceTransformer
 
 import server.endpoint_authentication as auth
 import server.endpoint_genre as genre
 import server.endpoint_recommendations as rec
 from common.constants import *
 from common.utils import setup_logging
-from db import Interactions, initialize_database
-from db.connection import get_db
+from db import Interactions
 from model import handler as model_handler
 from server.schemas import *
 from server.service_recommendations import RecommendationService
-
-# Initialize database on startup
-initialize_database()
+from setup_database import handler as database_handler
 
 app = FastAPI(title="Book Recommender API", version="0.1.0")
 
@@ -32,8 +30,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize database on startup
+db = database_handler.run_data_pipeline()
+model = model_handler.run_model_pipeline()
+
 service = RecommendationService()
 idb = Interactions()
+
 logger = setup_logging(__name__, PATHS["app_log_file"])
 
 pipeline_state_lock = threading.Lock()
@@ -42,6 +45,7 @@ pipeline_state = {"status": "idle", "current_stage": None, "overall_progress": 0
 
 @app.get("/status")
 def recommendation_status():
+    logger.info(f"Retrieving recommendation status..")
     return {"ready": service.ready}
 
 
@@ -102,14 +106,13 @@ def get_genres():
 def create_genre(payload: CreateGenreRequest):
     """Create a new genre."""
     try:
-        db = get_db()
         conn = db.get_connection()
         cursor = conn.cursor()
 
         # Check if genre already exists
         cursor.execute("SELECT genre_id FROM genres WHERE name = ?", (payload.name,))
         existing = cursor.fetchone()
-        
+
         if existing:
             conn.close()
             raise HTTPException(status_code=409, detail=f"Genre '{payload.name}' already exists")
@@ -117,7 +120,7 @@ def create_genre(payload: CreateGenreRequest):
         # Insert new genre
         cursor.execute("INSERT INTO genres (name) VALUES (?)", (payload.name,))
         conn.commit()
-        
+
         # Get the created genre ID
         genre_id = cursor.lastrowid
         conn.close()
@@ -153,7 +156,6 @@ def set_user_genres(payload: UserGenresRequest):
 def get_authors(q: Optional[str] = None):
     """Get all authors, optionally filtered by search query."""
     try:
-        db = get_db()
         conn = db.get_connection()
         cursor = conn.cursor()
 
@@ -178,14 +180,13 @@ def get_authors(q: Optional[str] = None):
 def create_author(payload: CreateAuthorRequest):
     """Create a new author."""
     try:
-        db = get_db()
         conn = db.get_connection()
         cursor = conn.cursor()
 
         # Check if author already exists
         cursor.execute("SELECT author_id FROM authors WHERE name = ?", (payload.name,))
         existing = cursor.fetchone()
-        
+
         if existing:
             conn.close()
             raise HTTPException(status_code=409, detail=f"Author '{payload.name}' already exists")
@@ -193,7 +194,7 @@ def create_author(payload: CreateAuthorRequest):
         # Insert new author
         cursor.execute("INSERT INTO authors (name) VALUES (?)", (payload.name,))
         conn.commit()
-        
+
         # Get the created author ID
         author_id = cursor.lastrowid
         conn.close()
@@ -221,7 +222,7 @@ def get_book_details(book_id: int):
                 status_code=503, detail="Recommendation artifacts are not available. Run the pipeline to generate them."
             )
 
-        details = service.get_book_details_from_db(book_id)
+        details = service.get_book_details(book_id)
         if details is None:
             raise HTTPException(status_code=404, detail=f"Book with ID {book_id} not found")
         return BookDetails(**details)
@@ -238,8 +239,7 @@ def search_books(title: str, author_ids: list[int] = None):
     """Search for books by title and author IDs."""
     try:
         logger.info(f"Search books - Title: {title}, Author IDs: {author_ids}")
-        
-        db = get_db()
+
         conn = db.get_connection()
         cursor = conn.cursor()
 
@@ -289,7 +289,6 @@ def search_books(title: str, author_ids: list[int] = None):
 def add_book(payload: AddBookRequest):
     """Add a new book to the catalog."""
     try:
-        db = get_db()
         conn = db.get_connection()
         cursor = conn.cursor()
 
@@ -315,6 +314,27 @@ def add_book(payload: AddBookRequest):
 
         conn.commit()
         conn.close()
+
+        try:
+            # Fetch genre names
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT g.name FROM genres g JOIN book_genres bg ON g.genre_id = bg.genre_id WHERE bg.book_id = ?",
+                (next_book_id,),
+            )
+            genres = [row[0] for row in cursor.fetchall()]
+            conn.close()
+
+            # Generate embedding
+            model = SentenceTransformer(EMBEDDINGS["embedding_model"])
+            embedding = db.generate_single_book_embedding(payload.title, genres, payload.description, model)
+
+            # Save to database
+            db.save_embedding_to_db(next_book_id, embedding)
+            logger.info(f"✓ Embedding generated for book {next_book_id}")
+        except Exception as e:
+            logger.warning(f"Failed to generate embedding for book {next_book_id}: {str(e)}")
 
         logger.info(f"Book added: {next_book_id} - {payload.title}")
         return AddBookResponse(book_id=next_book_id, title=payload.title, created_at=now)
@@ -404,7 +424,7 @@ def trigger_batch_retrain():
     """Manually trigger batch retraining of the CF model."""
     try:
         from scripts.batch_retrain import main as batch_retrain_main
-        
+
         # Start retrain in background thread
         retrain_thread = threading.Thread(target=_run_batch_retrain_background, daemon=True)
         retrain_thread.start()
@@ -452,10 +472,10 @@ def _run_batch_retrain_background():
     """Execute batch retraining in background."""
     try:
         from scripts.batch_retrain import main as batch_retrain_main
-        
+
         logger.info("Starting batch retraining in background...")
         success = batch_retrain_main()
-        
+
         if success:
             logger.info("✓ Batch retraining completed successfully")
             # Reinitialize recommendation service with updated factors
@@ -463,7 +483,7 @@ def _run_batch_retrain_background():
             logger.info("✓ RecommendationService reinitialized with updated factors")
         else:
             logger.error("Batch retraining failed")
-    
+
     except Exception as e:
         logger.error(f"Batch retraining background execution failed: {str(e)}\n{traceback.format_exc()}")
 
@@ -474,7 +494,7 @@ def _run_pipeline_background():
         logger.info("Starting full pipeline execution...")
 
         stages = [
-            ("stage_1", "Data pipeline", model_handler.run_data_pipeline, 0),
+            ("stage_1", "Data pipeline", database_handler.run_data_pipeline, 0),
             ("stage_2", "Model pipeline", model_handler.run_model_pipeline, 50),
         ]
 

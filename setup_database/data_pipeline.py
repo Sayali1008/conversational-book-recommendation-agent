@@ -93,6 +93,30 @@ def generate_embeddings(df, model, batch_size=64):
     return embeddings, index
 
 
+def save_embeddings_to_database(catalog_df, embeddings):
+    """Save pre-computed embeddings to database for all books."""
+    from db.connection import get_db
+    
+    db = get_db()
+    conn = db.get_connection()
+    try:
+        cursor = conn.cursor()
+        
+        for idx, (book_id, embedding) in enumerate(zip(catalog_df["book_id"], embeddings)):
+            embedding_blob = embedding.tobytes()
+            embedding_dim = embedding.shape[0]
+            
+            cursor.execute(
+                "INSERT OR IGNORE INTO book_embeddings (book_id, embedding, dim) VALUES (?, ?, ?)",
+                (int(book_id), embedding_blob, int(embedding_dim))
+            )
+        
+        conn.commit()
+        logger.info(f"✓ Saved {len(embeddings)} embeddings to database")
+    finally:
+        conn.close()
+
+
 # region HELPERS
 def _normalize_author_column(author_col):
     """

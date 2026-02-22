@@ -18,7 +18,7 @@
         <!-- Book Card -->
         <div v-else class="card-wrapper">
             <!-- Left Arrow (Dislike) -->
-            <button class="arrow-btn arrow-left" @click="handleSwipe('dislike')"
+            <button class="arrow-btn" @click="handleSwipe('dislike')"
                 title="Dislike (Left Arrow or Swipe Left)" :disabled="loading">
                 👎
             </button>
@@ -50,7 +50,7 @@
             </div>
 
             <!-- Right Arrow (Like) -->
-            <button class="arrow-btn arrow-right" @click="handleSwipe('like')" title="Like (Right Arrow or Swipe Right)"
+            <button class="arrow-btn" @click="handleSwipe('like')" title="Like (Right Arrow or Swipe Right)"
                 :disabled="loading">
                 👍
             </button>
@@ -354,7 +354,7 @@ export default {
 .arrow-btn {
     width: 60px;
     height: 100%;
-    background-color: rgba(216, 191, 216, 0.3);
+    background-color: var(--primary-purple-light);;
     border: none;
     border-radius: 12px;
     font-size: 32px;
@@ -376,19 +376,7 @@ export default {
     cursor: not-allowed;
 }
 
-.arrow-left {
-    background-color: rgba(243, 154, 200, 0.2);
-}
-
-.arrow-left:hover:not(:disabled) {
-    background-color: rgba(243, 154, 200, 0.4);
-}
-
-.arrow-right {
-    background-color: rgba(216, 191, 216, 0.2);
-}
-
-.arrow-right:hover:not(:disabled) {
+.arrow-btn:hover:not(:disabled) {
     background-color: rgba(216, 191, 216, 0.4);
 }
 
@@ -396,7 +384,7 @@ export default {
 .book-card {
     flex: 1;
     height: 100%;
-    background: linear-gradient(135deg, var(--primary-purple-light), var(--primary-pink-light));
+    background: var(--primary-purple-dark);
     border-radius: 12px;
     padding: 30px;
     display: flex;

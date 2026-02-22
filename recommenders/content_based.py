@@ -18,11 +18,11 @@ def get_content_based_scorer(
     candidate_catalog_rows: Optional[np.ndarray] = None,
     user_profile: Optional[np.ndarray] = None,
 ):
-    logger.info(f"[CB] Not a warm user, using content-based scorer with user profile {user_profile.shape}")
+    # logger.info(f"[CB] Not a warm user, using content-based scorer with user profile {user_profile.shape}")
 
     # Catalog rows to be excluded are either seed items, liked items, or both
     exclude_catalog_rows = exclude_catalog_rows or set()
-    logger.info(f"[CB] exclusions length: {len(exclude_catalog_rows)}")
+    # logger.info(f"[CB] exclusions length: {len(exclude_catalog_rows)}")
 
     if user_profile is None:
         if exclude_catalog_rows is not None and len(exclude_catalog_rows) > 0:

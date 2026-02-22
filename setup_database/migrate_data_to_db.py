@@ -9,7 +9,6 @@ Handles:
 
 import ast
 import sqlite3
-import pandas as pd
 
 from common.constants import PATHS
 from common.utils import safe_read_feather, setup_logging
@@ -38,7 +37,7 @@ class DataMigration:
         try:
             logger.info("Starting complete data migration...")
 
-            # 1. Load genres (must be first, FK dependency)
+            # 1. Load genres
             self.migrate_genres()
 
             # 2. Load authors
@@ -197,7 +196,6 @@ class DataMigration:
         self.conn.commit()
         logger.info(f"✓ Inserted {len(book_genres_data)} book-genre relationships")
 
-
     def migrate_book_authors(self):
         """Build book_authors junction from catalog."""
         logger.info("Migrating book-authors relationships...")
@@ -236,6 +234,43 @@ class DataMigration:
 
         self.conn.commit()
         logger.info(f"✓ Inserted {len(book_authors_data)} book-author relationships")
+
+    def migrate_users(self):
+        """Extract users from ratings DataFrame and create user records."""
+        logger.info("Migrating users...")
+
+        # Check if already migrated
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        if cursor.fetchone()[0] > 0:
+            logger.info("Users already migrated, skipping")
+            return
+
+        # Load cleaned ratings to extract unique users
+        ratings_df = safe_read_feather(PATHS["clean_ratings"])
+        
+        # Extract unique users from ratings DataFrame (not database)
+        unique_users = ratings_df["user_id"].unique().tolist()
+        logger.info(f"Found {len(unique_users)} unique users in ratings")
+
+        # Create user_id to profilename mapping (use first occurrence)
+        user_name_map = {}
+        for _, row in ratings_df.iterrows():
+            user_id = str(row["user_id"])
+            if user_id not in user_name_map:
+                user_name_map[user_id] = str(row["profilename"])
+
+        # Insert users with name from profilename mapping
+        users_data = []
+        for user_id in unique_users:
+            user_id_str = str(user_id)
+            user_name = user_name_map.get(user_id_str, user_id_str)
+            users_data.append((user_id_str, user_name, 0))
+
+        cursor.executemany("INSERT OR IGNORE INTO users (user_id, name, login_attempt) VALUES (?, ?, ?)", users_data)
+
+        self.conn.commit()
+        logger.info(f"✓ Inserted {len(users_data)} users")
 
     def migrate_ratings(self):
         """Load ratings data into database."""
@@ -298,43 +333,6 @@ class DataMigration:
         self.conn.commit()
         logger.info(f"✓ Inserted {len(ratings_data)} ratings")
 
-    def migrate_users(self):
-        """Extract users from ratings DataFrame and create user records."""
-        logger.info("Migrating users...")
-
-        # Check if already migrated
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM users")
-        if cursor.fetchone()[0] > 0:
-            logger.info("Users already migrated, skipping")
-            return
-
-        # Load cleaned ratings to extract unique users
-        ratings_df = safe_read_feather(PATHS["clean_ratings"])
-        
-        # Extract unique users from ratings DataFrame (not database)
-        unique_users = ratings_df["user_id"].unique().tolist()
-        logger.info(f"Found {len(unique_users)} unique users in ratings")
-
-        # Create user_id to profilename mapping (use first occurrence)
-        user_name_map = {}
-        for _, row in ratings_df.iterrows():
-            user_id = str(row["user_id"])
-            if user_id not in user_name_map:
-                user_name_map[user_id] = str(row["profilename"])
-
-        # Insert users with name from profilename mapping
-        users_data = []
-        for user_id in unique_users:
-            user_id_str = str(user_id)
-            user_name = user_name_map.get(user_id_str, user_id_str)
-            users_data.append((user_id_str, user_name, 0))
-
-        cursor.executemany("INSERT OR IGNORE INTO users (user_id, name, login_attempt) VALUES (?, ?, ?)", users_data)
-
-        self.conn.commit()
-        logger.info(f"✓ Inserted {len(users_data)} users")
-
     def print_migration_summary(self):
         """Print summary of migrated data."""
         cursor = self.conn.cursor()
@@ -366,7 +364,7 @@ class DataMigration:
         logger.info("=" * 80)
 
 
-def migrate_data():
+def migrate_to_db():
     """Main migration function to be called from command line or app initialization."""
     with DataMigration() as migrator:
         migrator.migrate_all()

@@ -6,25 +6,17 @@
                 <h1 class="header-title">📚 Book Explorer</h1>
                 <p class="header-subtitle">Discover your next favorite book</p>
             </div>
-            
+
             <div class="header-right">
                 <!-- Add Book Button -->
-                <button 
-                    v-if="dataReady"
-                    class="btn-icon btn-add-book" 
-                    @click="showAddBookModal = true"
-                    title="Add a new book"
-                >
+                <button v-if="dataReady" class="btn-icon btn-add-book" @click="showAddBookModal = true"
+                    title="Add a new book">
                     ➕ Add Book
                 </button>
 
                 <!-- Profile Menu -->
                 <div class="profile-container">
-                    <button 
-                        class="profile-icon" 
-                        @click="showProfileMenu = !showProfileMenu"
-                        :title="userName"
-                    >
+                    <button class="profile-icon" @click="showProfileMenu = !showProfileMenu" :title="userName">
                         {{ userName.charAt(0).toUpperCase() }}
                     </button>
                     <div v-if="showProfileMenu" class="profile-menu" @click="showProfileMenu = false">
@@ -44,24 +36,15 @@
         <Toast :message="toast.message" :type="toast.type" :icon="toast.icon" :show="toast.show" />
 
         <!-- Authentication Views -->
-        <LoginView
-            v-if="!authenticated && authView === 'login'"
-            @login-success="onLoginSuccess"
-            @switch-to-register="authView = 'register'"
-        />
-        <RegistrationView
-            v-else-if="!authenticated && authView === 'register'"
-            @registration-success="onLoginSuccess"
-            @switch-to-login="authView = 'login'"
-        />
+        <LoginView v-if="!authenticated && authView === 'login'" @login-success="onLoginSuccess"
+            @switch-to-register="authView = 'register'" />
+        <RegistrationView v-else-if="!authenticated && authView === 'register'" @registration-success="onLoginSuccess"
+            @switch-to-login="authView = 'login'" />
 
         <!-- Main App Views -->
         <div v-else-if="authenticated" class="app-main">
             <!-- Genre Selection for first-time users -->
-            <GenreSelectView
-                v-if="showGenreSelect"
-                @genres-saved="onGenresSaved"
-            />
+            <GenreSelectView v-if="showGenreSelect" @genres-saved="onGenresSaved" />
 
             <!-- Loading state -->
             <div v-else-if="dataReady === false && !initialized" class="loading-view">
@@ -69,44 +52,19 @@
                 <p>Checking recommendation data...</p>
             </div>
 
-            <!-- Data not ready - offer to run pipeline -->
-            <div v-else-if="dataReady === false && initialized" class="pipeline-prompt">
-                <div class="prompt-card">
-                    <h2>No Recommendation Data Available</h2>
-                    <p>We need to run the ML pipeline to generate personalized recommendations.</p>
-                    <button class="btn-primary" @click="showPipelineView = true">
-                        Run Pipeline
-                    </button>
-                </div>
-            </div>
-
-            <!-- Show pipeline view if running -->
-            <PipelineView 
-                v-if="showPipelineView"
-                @pipeline-complete="onPipelineComplete"
-                @cancel="showPipelineView = false"
-            />
+            <!-- Pipeline view - shown when data not ready or explicitly triggered -->
+            <PipelineView v-else-if="showPipelineView" @pipeline-complete="onPipelineComplete"
+                @cancel="showPipelineView = false" />
 
             <!-- Main recommendations view -->
-            <RecommendationsView 
-                v-else-if="dataReady"
-                @show-book-details="showBookDetails"
-            />
+            <RecommendationsView v-else-if="dataReady" @show-book-details="showBookDetails" />
         </div>
 
         <!-- Book Details Modal -->
-        <BookDetailsModal 
-            v-if="selectedBook"
-            :book="selectedBook"
-            @close="selectedBook = null"
-        />
+        <BookDetailsModal v-if="selectedBook" :book="selectedBook" @close="selectedBook = null" />
 
         <!-- Add Book Modal -->
-        <AddBookModal 
-            v-if="showAddBookModal"
-            @book-added="onBookAdded"
-            @close="showAddBookModal = false"
-        />
+        <AddBookModal v-if="showAddBookModal" @book-added="onBookAdded" @close="showAddBookModal = false" />
     </div>
 </template>
 
@@ -166,22 +124,31 @@ export default {
                 this.dataReady = false
             }
             this.initialized = true
+            // Automatically show pipeline if no recommendations available
+            if (!this.dataReady) {
+                this.showPipelineView = true
+            }
         },
 
         onLoginSuccess(userData) {
             this.authenticated = true
-            if (typeof userData === 'string') {
-                this.userId = userData
-                this.userName = userData
-            } else {
-                this.userId = userData.user_id || userData.userId
-                this.userName = userData.name || userData.displayName || this.userId
-            }
+            this.userId = userData.user_id
+            this.userName = userData.name
+
+            console.log('onLoginSuccess received userData:', userData)
+            console.log('first_login value:', userData.first_login, 'type:', typeof userData.first_login)
+            
             sessionStorage.setItem('userId', this.userId)
             sessionStorage.setItem('userName', this.userName)
             this.showToast(`Welcome, ${this.userName}!`, 'success', '✓')
+
             // Show genre selection for first-time users
-            this.showGenreSelect = true
+            this.showGenreSelect = userData.first_login === true
+
+            // For returning users, immediately check data status
+            if (!userData.first_login) {
+                this.checkDataStatus()
+            }
         },
 
         onPipelineComplete() {
@@ -405,8 +372,7 @@ export default {
     padding: 40px;
 }
 
-.loading-view,
-.pipeline-prompt {
+.loading-view {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -426,24 +392,6 @@ export default {
     to {
         transform: rotate(360deg);
     }
-}
-
-.prompt-card {
-    background-color: var(--bg-primary);
-    padding: 40px;
-    border-radius: 12px;
-    text-align: center;
-    box-shadow: var(--shadow-lg);
-}
-
-.prompt-card h2 {
-    color: var(--text-primary);
-    margin-bottom: 16px;
-}
-
-.prompt-card p {
-    color: var(--text-secondary);
-    margin-bottom: 24px;
 }
 
 .btn-primary {

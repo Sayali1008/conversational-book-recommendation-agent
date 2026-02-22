@@ -1,7 +1,7 @@
 <template>
     <main class="main-content">
         <div class="pipeline-container">
-            <div v-if="!running" class="empty-state">
+            <div v-if="!running">
                 <div class="empty-card">
                     <div class="empty-icon">⚙️</div>
                     <h2 class="empty-title">No Data Available</h2>

@@ -11,10 +11,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 CLEAN_DATA_DIR = DATA_DIR / "clean"
 DATABASE_DIR = DATA_DIR / "database"
-EMBEDDINGS_DIR = DATA_DIR / "embeddings"
-MATRICES_DIR = DATA_DIR / "matrices"
-PKL_DIR = DATA_DIR / "pkl"
 MODEL_DIR = DATA_DIR / "model"
+BACKUP_DIR = DATA_DIR / "backup"
 LOGS_DIR = PROJECT_ROOT / "logs"
 APP_LOGS_DIR = PROJECT_ROOT / "logs" / "app_logs"
 EVAL_LOGS_DIR = PROJECT_ROOT / "logs" / "eval_logs"
@@ -94,14 +92,14 @@ PATHS = {
     "clean_ratings": str(CLEAN_DATA_DIR / "cleaned_ratings_data.ftr"),
     "database": str(DATABASE_DIR / "system.db"),
     # embeddings
-    "catalog_books_index": str(EMBEDDINGS_DIR / f"catalog_books_{EMBEDDINGS['dim']}.index"),
-    "catalog_books_embeddings": str(EMBEDDINGS_DIR / f"catalog_books_{EMBEDDINGS['dim']}.npy"),
+    "catalog_books_index": str(CLEAN_DATA_DIR / f"catalog_books_{EMBEDDINGS['dim']}.index"),
+    "catalog_books_embeddings": str(CLEAN_DATA_DIR / f"catalog_books_{EMBEDDINGS['dim']}.npy"),
     # interaction matrices
-    "train_matrix": str(MATRICES_DIR / "train_matrix.npz"),
-    "val_matrix": str(MATRICES_DIR / "val_matrix.npz"),
+    "train_matrix": str(MODEL_DIR / "train_matrix.npz"),
+    "val_matrix": str(MODEL_DIR / "val_matrix.npz"),
     # model artifacts
-    "user_idx_pkl": str(PKL_DIR / "user_to_idx.pkl"),
-    "book_idx_pkl": str(PKL_DIR / "book_to_idx.pkl"),
+    "user_idx_pkl": str(MODEL_DIR / "user_to_idx.pkl"),
+    "book_idx_pkl": str(MODEL_DIR / "book_to_idx.pkl"),
     "als_model": str(MODEL_DIR / "als_model.pkl"),
     "user_factors": str(MODEL_DIR / "user_factors.npy"),
     "book_factors": str(MODEL_DIR / "book_factors.npy"),

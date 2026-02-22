@@ -4,61 +4,19 @@ from pathlib import Path
 import numpy as np
 import scipy.sparse as sp
 from implicit.als import AlternatingLeastSquares
-from sentence_transformers import SentenceTransformer
 
 from common import utils
 from common.constants import *
-from model.data_pipeline import *
 from model.model_pipeline import *
-from scripts.migrate_data_to_db import migrate_data
 
 logger = setup_logging(__name__, PATHS["eval_log_file"])
 
-
-def run_data_pipeline():
-    try:
-        for dir_path in [CLEAN_DATA_DIR, EMBEDDINGS_DIR, DATABASE_DIR, PKL_DIR, MODEL_DIR, MATRICES_DIR]:
-            Path(dir_path).mkdir(parents=True, exist_ok=True)
-
-        logger.info("Loading raw books data...")
-        books_df = utils.safe_read_csv(PATHS["books"], DATA_PREPROCESSING["input_cols_books"])
-        logger.info(f"Loaded {len(books_df)} books")
-
-        logger.info("Cleaning books data...")
-        catalog_books_df = clean_books_data(books_df)
-
-        logger.info("Loading raw ratings data...")
-        ratings_df = utils.safe_read_csv(PATHS["ratings"], DATA_PREPROCESSING["input_cols_ratings"])
-        logger.info(f"Loaded {len(ratings_df)} ratings")
-
-        logger.info("Cleaning ratings data...")
-        ratings_df = clean_ratings_data(ratings_df, catalog_books_df)
-
-        catalog_books_df[DATA_PREPROCESSING["output_cols_books"]].to_feather(PATHS["clean_books"])
-        ratings_df[DATA_PREPROCESSING["output_cols_ratings"]].to_feather(PATHS["clean_ratings"])
-
-        logger.info("Starting data migration to database...")
-        migrate_data()
-        logger.info("✓ Data migration completed")
-
-        logger.info("Loading sentence transformer...")
-        model = SentenceTransformer(EMBEDDINGS["embedding_model"])
-
-        logger.info("Loading cleaned books...")
-        catalog_df = utils.safe_read_feather(PATHS["clean_books"])
-
-        logger.info("Generating embeddings...")
-        embeddings, index = generate_embeddings(catalog_df, model, EMBEDDINGS["batch_size"])
-
-        np.save(PATHS["catalog_books_embeddings"], embeddings)
-
-        logger.info("✓ Data pipeline completed")
-    except Exception as e:
-        raise
-
-
 def run_model_pipeline():
-    for dir_path in [PKL_DIR, MODEL_DIR, MATRICES_DIR]:
+    # Check if model artifacts already exist to skip training if not needed
+    if os.path.exists(PATHS["best_rec_params"]):
+        return logger.info("Model already exists. Skipping training pipeline.")
+
+    for dir_path in [MODEL_DIR]:
         Path(dir_path).mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Starting model training...")
@@ -91,7 +49,7 @@ def run_model_pipeline():
 
     sp.save_npz(PATHS["train_matrix"], hp_train_matrix)
     sp.save_npz(PATHS["val_matrix"], hp_val_matrix)
-
+    
     if os.path.exists(PATHS["als_model"] and PATHS["best_model_params"]):
         logger.info(f"Loading existing model and parameters...")
         best_params = utils.load_pickle(PATHS["best_model_params"])

@@ -20,6 +20,7 @@ class RecommendationService:
     def __init__(self):
         self.ready: bool = False
         self.init_error: Optional[str] = None
+        self.db = get_db()
 
         # Check that all required artifacts exist before loading
         required_files = [
@@ -41,7 +42,7 @@ class RecommendationService:
         try:
             # Load Data Artifacts
             catalog_df = safe_read_feather(PATHS["clean_books"])
-            catalog_embeddings = np.load(PATHS["catalog_books_embeddings"])
+            catalog_embeddings = self.db.load_all_embeddings_from_db(catalog_df)
 
             user_factors = np.load(PATHS["user_factors"])
             book_factors = np.load(PATHS["book_factors"])
@@ -133,22 +134,18 @@ class RecommendationService:
 
     def get_book_details_from_db(self, book_id: int) -> Optional[Dict]:
         """Retrieve full details for a specific book from the database.
-        
+
         This queries the actual database tables and is useful for newly added books
         that may not be in the recommendation catalog yet.
         """
         try:
-            db = get_db()
-            conn = db.get_connection()
+            conn = self.db.get_connection()
             cursor = conn.cursor()
 
             # Get book info
-            cursor.execute(
-                "SELECT book_id, title, description, infolink FROM books WHERE book_id = ?",
-                (book_id,)
-            )
+            cursor.execute("SELECT book_id, title, description, infolink FROM books WHERE book_id = ?", (book_id,))
             book_row = cursor.fetchone()
-            
+
             if not book_row:
                 logger.warning(f"Book ID {book_id} not found in database")
                 return None
@@ -161,7 +158,7 @@ class RecommendationService:
                 WHERE ba.book_id = ?
                 ORDER BY a.name
                 """,
-                (book_id,)
+                (book_id,),
             )
             author_rows = cursor.fetchall()
             authors = [row[0] for row in author_rows]
@@ -174,7 +171,7 @@ class RecommendationService:
                 WHERE bg.book_id = ?
                 ORDER BY g.name
                 """,
-                (book_id,)
+                (book_id,),
             )
             genre_rows = cursor.fetchall()
             genres = [row[0] for row in genre_rows]
@@ -236,8 +233,7 @@ class RecommendationService:
         Returns None if user has no genres or if embedding cannot be built.
         """
         try:
-            db = get_db()
-            conn = db.get_connection()
+            conn = self.db.get_connection()
 
             try:
                 cursor = conn.cursor()

@@ -63,6 +63,13 @@ export default {
 
       try {
         const response = await loginUser(this.form.userId)
+
+        console.log('Login response:', response)
+        if (response.first_login === undefined) {
+            console.warn('first_login missing from login response!')
+            response.first_login = false  // Fallback: assume returning user
+        }
+        
         // Emit the full response object with user_id and name
         this.$emit('login-success', response)
       } catch (err) {

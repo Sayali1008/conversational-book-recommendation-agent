@@ -1,7 +1,6 @@
 import logging
 import os
 import pickle
-import sys
 from typing import Optional
 
 import pandas as pd
@@ -9,23 +8,23 @@ import pandas as pd
 
 def setup_logging(stage_name: str, log_file: str, level=logging.INFO):
     """Configure logging for a pipeline stage.
-    
+
     Args:
         stage_name: Name for the logger (typically __name__)
         log_file: Path to the log file to write to
         level: Logging level (default: INFO)
-    
+
     Returns:
         Configured logger instance
     """
     logger = logging.getLogger(stage_name)
     logger.handlers.clear()
-    
+
     # Disable propagation to root logger to prevent duplicate logging
     logger.propagate = False
 
     logger.setLevel(level)
-    
+
     # File Handler
     file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
@@ -106,4 +105,3 @@ def load_pickle(file_path: str):
 def save_pickle(data, filename):
     with open(filename, "wb") as f:
         pickle.dump(data, f)
-

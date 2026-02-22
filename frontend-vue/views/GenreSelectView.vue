@@ -99,6 +99,7 @@ export default {
 
       try {
         const userId = sessionStorage.getItem('userId')
+        console.log('handleSaveGenres()', userId)
         await saveUserGenres({
           user_id: userId,
           genre_ids: this.selectedGenreIds

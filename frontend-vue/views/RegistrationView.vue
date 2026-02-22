@@ -137,6 +137,13 @@ export default {
           name: this.form.name.trim(),
           user_id: this.form.userId.trim()
         })
+
+        console.log('Registration response:', response)
+        if (response.first_login === undefined) {
+            console.warn('first_login missing from registration response!')
+            response.first_login = true  // Fallback: new users always need genres
+        }
+        
         // Emit the full response object with user_id and name
         this.$emit('registration-success', response)
       } catch (err) {
